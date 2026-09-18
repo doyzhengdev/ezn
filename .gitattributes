@@ -6,5 +6,5 @@
 *.zip binary
 *.gz binary
 
-# lockfile 在 diff / 合并时按生成物对待
-package-lock.json -diff linguist-generated
+# lockfile 在 GitHub 上按生成物折叠（不影响 diff）
+package-lock.json linguist-generated=true
