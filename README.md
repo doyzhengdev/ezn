@@ -5,8 +5,8 @@
 `ezn` 按需把一个固定版本的 Node 运行时下载并落位到**项目自己的** `node/` 目录，然后在该运行时上执行你给的命令——`vitest`、`tsc`、`vite`，或任何别的东西。
 
 ```bash
-npx ezn node -v        # 用项目固定的 Node 版本
-npx ezn vitest run     # 在该 Node 上跑测试
+npx @doyzheng/ezn node -v        # 用项目固定的 Node 版本
+npx @doyzheng/ezn vitest run     # 在该 Node 上跑测试
 ```
 
 版本只在 `package.json` 里声明一次：
@@ -23,7 +23,7 @@ npx ezn vitest run     # 在该 Node 上跑测试
 
 `ezn` 的取舍是：**版本进配置文件，运行时进项目目录**。
 
-- **零安装**：`npx ezn` 即可，团队新人 clone 下来就能跑，不需要装任何版本管理器。
+- **零安装**：`npx @doyzheng/ezn` 即可，团队新人 clone 下来就能跑，不需要装任何版本管理器。
 - **版本是配置不是命令**：一个项目一个版本，写在 `package.json` 里，脚本里只写 `ezn vitest run`。
 - **运行时随项目走**：落在 `<项目>/node/`，和项目同生命周期。想清理就直接删掉那个目录。
 - **只下一个版本**：不像 nvm 那样在全局缓存里堆一大堆版本。
@@ -35,14 +35,16 @@ npx ezn vitest run     # 在该 Node 上跑测试
 不需要安装。用 `npx` 直接跑：
 
 ```bash
-npx ezn --help
+npx @doyzheng/ezn --help
 ```
 
 想固定下来（推荐）——作为 devDependency 装进项目，这样团队里每个人拿到的版本一致：
 
 ```bash
-npm install -D ezn
+npm install -D @doyzheng/ezn
 ```
+
+> 包名带 scope，但 **bin 名就是 `ezn`**，所以 `node_modules/.bin/ezn` 照常生成，下面的脚本写法一个字都不用改。只有 `npx` 全局直调才需要写全名 `@doyzheng/ezn`。
 
 然后在 `package.json` 的脚本里直接用 `ezn`：
 
@@ -78,7 +80,7 @@ npm install -D ezn
 
 写 `"22"` 而不是 `"22.13.5"` 通常更好：ezn 会在内置版本表里按**组件级前缀**匹配到该主版本最新的一个 patch（`"22"` → `v22.23.2`），等于自动拿到安全更新。写全三段则精确锁定。注意 `"22.1"` **不会**匹配到 `22.13.x`——前缀是逐段比对的。
 
-> ⚠️ **`ezllm-node` 这个键名是历史遗留**，取自本项目的来源仓库，与包名 `ezn` 不一致。之所以还没改，是因为它是**破坏性的**：改名会让所有既有项目的配置失效。计划在 `1.0.0` 时统一改为 `ezn`，届时会同时支持两个键名并给出迁移提示。
+> ⚠️ **`ezllm-node` 这个配置键名是历史遗留**，取自本项目的来源仓库，与包名 `@doyzheng/ezn` 不一致。之所以还没改，是因为它是**破坏性的**：改名会让所有既有项目的配置失效。计划在 `1.0.0` 时统一改为 `ezn`，届时会同时支持两个键名并给出迁移提示。
 
 **务必把运行时目录加进 `.gitignore`**，否则上百 MB 的运行时会被 git 追踪：
 
@@ -125,7 +127,7 @@ npm install -D ezn
 如果你需要在代码里（而不只是命令行）管理这个运行时，包同时导出一个 `Node` 类：
 
 ```ts
-import { Node } from "ezn";
+import { Node } from "@doyzheng/ezn";
 
 // 确保 <appDir>/node 下有 Node 22，返回实例
 const node = await Node.ensure(appDir, "22");

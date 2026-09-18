@@ -1,5 +1,5 @@
 {
-  "name": "ezn",
+  "name": "@doyzheng/ezn",
   "version": "0.0.1",
   "description": "在项目固定版本的托管 Node 上执行任意命令：按需下载/落位 Node 运行时，零系统依赖（npx nve 22 的替代）",
   "license": "MIT",
@@ -50,7 +50,8 @@
     "url": "https://github.com/doyzhengdev/ezn/issues"
   },
   "publishConfig": {
-    "registry": "https://registry.npmjs.org/"
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
   },
   "scripts": {
     "build": "node scripts/build.mjs",
