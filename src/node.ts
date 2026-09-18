@@ -1,8 +1,8 @@
 /**
- * @file Node 运行时工具类（ezllm 内部包 ezllm-node 的实现主体）。
+ * @file Node 运行时工具类（`@doyzheng/ezn` 的实现主体）。
  * @fileoverview
  * 单一布局：运行时根恒为 `<appDir>/node`（nvm 同构，无版本目录层），无状态幂等。该目录同时是
- * **包的安装位置**（Windows `<rt>/node_modules/ezllm`、POSIX `<rt>/lib/node_modules/ezllm`），
+ * **包的安装位置**（Windows `<rt>/node_modules/ezn`、POSIX `<rt>/lib/node_modules/ezn`），
  * 与 node 自带包同处一个共享目录——故落位一律逐条目进行、共享目录按子项合并，**绝不整目录
  * 让位或清空**（否则已装的托管包被抹掉，服务随即找不到自身入口 `server.js`）。落位见 `./install.ts`。
  *
@@ -280,13 +280,13 @@ export class Node {
    * 复用、零落位；否则交由 `installNode` 逐条目落位、共享目录按子项合并——**绝不整目录让位或清空**
    * （rt 内躺着 npm 装好的托管包，挪走就等于让服务找不到自身入口，详见文件头注）。
    *
-   * 环境变量 `ELLM_NODE_BIN` 为逃生口：指定一个现成的 Node 可执行文件，跳过下载与重装（返回实例的
-   * `rt` 仍为 `<appDir>/node`，即 CLI 解析位置不变）。`ELLM_NODE_MIRROR` 指定私有镜像。
+   * 环境变量 `EZN_NODE_BIN` 为逃生口：指定一个现成的 Node 可执行文件，跳过下载与重装（返回实例的
+   * `rt` 仍为 `<appDir>/node`，即 CLI 解析位置不变）。`EZN_NODE_MIRROR` 指定私有镜像。
    *
    * @param appDir - 应用根目录（运行时落在其下的 `node/`），相对路径会被 resolve 成绝对路径
    * @param nodeVersion - `"18"` | `"18.1"` | `"18.1.5"`（1~3 段数字），在内置表内按组件级前缀匹配
    * @returns 就绪的 {@link Node} 实例
-   * @throws nodeVersion 格式非法或无匹配；`ELLM_NODE_BIN` 指向的 Node 不存在或不可执行；下载/落位失败
+   * @throws nodeVersion 格式非法或无匹配；`EZN_NODE_BIN` 指向的 Node 不存在或不可执行；下载/落位失败
    */
   static async ensure(appDir: string, nodeVersion: string): Promise<Node> {
     const dir = resolve(appDir); // 相对路径统一转绝对（解压器要求绝对目标目录）
@@ -295,17 +295,17 @@ export class Node {
     const rt = join(dir, "node");
     const nodePath = nodeExecPath(rt);
 
-    const override = process.env.ELLM_NODE_BIN;
+    const override = process.env.EZN_NODE_BIN;
     if (override) {
-      if (!existsSync(override)) throw new Error(`ELLM_NODE_BIN 指定的 Node 不存在：${override}`);
+      if (!existsSync(override)) throw new Error(`EZN_NODE_BIN 指定的 Node 不存在：${override}`);
       const overrideMajor = Node.probeMajor(override);
-      if (overrideMajor === null) throw new Error(`ELLM_NODE_BIN 指定的 Node 无法执行：${override}`);
+      if (overrideMajor === null) throw new Error(`EZN_NODE_BIN 指定的 Node 无法执行：${override}`);
       if (overrideMajor < major) {
         console.error(
-          `[ezllm-node] 警告：ELLM_NODE_BIN 的 Node 主版本为 ${overrideMajor}，低于建议值 ${major}，按用户指定继续。`,
+          `[ezn] 警告：EZN_NODE_BIN 的 Node 主版本为 ${overrideMajor}，低于建议值 ${major}，按用户指定继续。`,
         );
       }
-      console.error(`[ezllm-node] Node 运行时（ELLM_NODE_BIN）：${override}`);
+      console.error(`[ezn] Node 运行时（EZN_NODE_BIN）：${override}`);
       return new Node(override, rt);
     }
 
@@ -315,15 +315,15 @@ export class Node {
       // 自带 npm 还没搬进来」的半成品状态——只按 node 判定就会把它当就绪复用，缺的 npm 永远补不上。
       const ready = current !== null && current >= major && isFlatRuntimeReady(rt);
       if (ready) {
-        console.error(`[ezllm-node] Node 运行时就绪：${nodePath}`);
+        console.error(`[ezn] Node 运行时就绪：${nodePath}`);
         return new Node(nodePath, rt);
       }
       if (current === null) {
-        console.error("[ezllm-node] 已有 Node 运行时无法执行（疑似损坏），准备重新安装 ...");
+        console.error("[ezn] 已有 Node 运行时无法执行（疑似损坏），准备重新安装 ...");
       } else if (current < major) {
-        console.error(`[ezllm-node] 已有 Node 运行时主版本为 ${current}，低于要求 ${major}，准备重装 ...`);
+        console.error(`[ezn] 已有 Node 运行时主版本为 ${current}，低于要求 ${major}，准备重装 ...`);
       } else {
-        console.error("[ezllm-node] 已有 Node 运行时缺少自带 npm（上次落位可能中断），准备补齐 ...");
+        console.error("[ezn] 已有 Node 运行时缺少自带 npm（上次落位可能中断），准备补齐 ...");
       }
       // 不整目录让位/清空——rt 内躺着 npm 装好的托管包，挪走就等于让服务找不到自身入口；
       // 由 installNode 逐条目落位、共享目录按子项合并兜底（见 ./install.ts）。

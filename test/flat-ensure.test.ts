@@ -1,6 +1,6 @@
-// ezllm-node 落位单测（离线）：Node.ensure 的复用判定，以及「逐条目落位 + 共享目录按子项合并」
-// 的落位语义——核心安全要求是该目录内由 npm 安装的包（<rt>/node_modules/ezllm，POSIX 为
-// <rt>/lib/node_modules/ezllm）不被挪走、不被覆盖，同时 node 自带 npm/corepack 仍能装进去。
+// ezn 落位单测（离线）：Node.ensure 的复用判定，以及「逐条目落位 + 共享目录按子项合并」
+// 的落位语义——核心安全要求是该目录内由 npm 安装的包（<rt>/node_modules/ezn，POSIX 为
+// <rt>/lib/node_modules/ezn）不被挪走、不被覆盖，同时 node 自带 npm/corepack 仍能装进去。
 //
 // 不做网络 I/O：**只 mock 掉最外层三个 I/O 依赖**（got / tar / extract-zip），落位逻辑本身
 // （installNode → downloadExtract → materializeFlat）全是真实执行——覆盖比过去「直接调内部
@@ -94,7 +94,7 @@ function listTree(root: string, prefix = ""): string[] {
 // npm/npx 的 CLI 入口——CLI 解析只认「文件在不在」，不依赖真实 node 安装。
 // npm 与 npx 的 CLI 同在 npm 包目录下（官方发行包如此：npx 随 npm 包发布）。
 function makeRuntimeRoot(relBase: string): string {
-  const root = mkdtempSync(join(tmpdir(), "ezllm-node-cli-"));
+  const root = mkdtempSync(join(tmpdir(), "ezn-cli-"));
   for (const which of ["npm", "npx"]) {
     const cli = join(root, relBase, "npm", "bin", `${which}-cli.js`);
     mkdirSync(dirname(cli), { recursive: true });
@@ -114,15 +114,15 @@ describe("Node.ensure 复用分支（不落位）", () => {
   let savedNodeBin: string | undefined;
 
   beforeEach(() => {
-    appDir = mkdtempSync(join(tmpdir(), "ezllm-node-flat-app-"));
-    // 本机可能通过逃生口设置了 ELLM_NODE_BIN（会短路掉探测分支），逐例隔离
-    savedNodeBin = process.env.ELLM_NODE_BIN;
-    delete process.env.ELLM_NODE_BIN;
+    appDir = mkdtempSync(join(tmpdir(), "ezn-flat-app-"));
+    // 本机可能通过逃生口设置了 EZN_NODE_BIN（会短路掉探测分支），逐例隔离
+    savedNodeBin = process.env.EZN_NODE_BIN;
+    delete process.env.EZN_NODE_BIN;
   });
 
   afterEach(() => {
-    if (savedNodeBin === undefined) delete process.env.ELLM_NODE_BIN;
-    else process.env.ELLM_NODE_BIN = savedNodeBin;
+    if (savedNodeBin === undefined) delete process.env.EZN_NODE_BIN;
+    else process.env.EZN_NODE_BIN = savedNodeBin;
     rmSync(appDir, { recursive: true, force: true });
   });
 
@@ -135,8 +135,8 @@ describe("Node.ensure 复用分支（不落位）", () => {
     // 复制当前 node 冒充已装运行时（ensure 只探测主版本，不校验具体构建）
     copyFileSync(process.execPath, nodePath);
     // 目录内的已装包与无关杂物：复用分支不得触碰它们
-    mkdirSync(join(rt, "node_modules", "ezllm"), { recursive: true });
-    writeFileSync(join(rt, "node_modules", "ezllm", "package.json"), '{"name":"ezllm"}');
+    mkdirSync(join(rt, "node_modules", "ezn"), { recursive: true });
+    writeFileSync(join(rt, "node_modules", "ezn", "package.json"), '{"name":"ezn"}');
     writeFileSync(join(rt, "stray.txt"), "KEEP");
     // 已装运行时的自带 npm（两种布局都放，保证任一本机平台都能判为就绪）
     for (const rel of [["node_modules"], ["lib", "node_modules"]]) {
@@ -156,7 +156,7 @@ describe("Node.ensure 复用分支（不落位）", () => {
     expect(readdirSync(rt).some((n) => n.includes(".old-"))).toBe(false);
   });
 
-  it("ELLM_NODE_BIN 逃生口 → path 取显式 Node，rt 仍为 <appDir>/node（决定 CLI 解析位置），零落位", async () => {
+  it("EZN_NODE_BIN 逃生口 → path 取显式 Node，rt 仍为 <appDir>/node（决定 CLI 解析位置），零落位", async () => {
     // 预置 POSIX 布局的自带 npm：rt 语义由「解析命中哪里」体现（而非探测进程 node 自己的目录）
     const rt = join(appDir, "node");
     const npmCli = join(rt, "lib", "node_modules", "npm", "bin", "npm-cli.js");
@@ -164,7 +164,7 @@ describe("Node.ensure 复用分支（不落位）", () => {
     writeFileSync(npmCli, "FAKE_NPM");
     const before = listTree(appDir);
 
-    process.env.ELLM_NODE_BIN = process.execPath;
+    process.env.EZN_NODE_BIN = process.execPath;
     const node = await Node.ensure(appDir, "18");
 
     expect(node.path).toBe(process.execPath);
@@ -182,7 +182,7 @@ describe("自带 npm/npx CLI 入口解析（Windows / POSIX 布局，离线）",
   beforeEach(() => {
     winRoot = makeRuntimeRoot("node_modules");
     posixRoot = makeRuntimeRoot(join("lib", "node_modules"));
-    emptyRoot = mkdtempSync(join(tmpdir(), "ezllm-node-cli-empty-"));
+    emptyRoot = mkdtempSync(join(tmpdir(), "ezn-cli-empty-"));
   });
 
   afterEach(() => {
@@ -250,7 +250,7 @@ describe("就绪判定（isFlatRuntimeReady，离线）", () => {
   }
 
   beforeEach(() => {
-    root = makeDir("ezllm-node-ready-");
+    root = makeDir("ezn-ready-");
   });
 
   afterEach(() => {
@@ -264,8 +264,8 @@ describe("就绪判定（isFlatRuntimeReady，离线）", () => {
     mkdirSync(dirname(nodePath), { recursive: true });
     writeFileSync(nodePath, "NODE_BIN");
     // 只有 npm 装好的托管包：正是「包先装、node 落位中途失败」的现场
-    mkdirSync(join(root, "node_modules", "ezllm"), { recursive: true });
-    writeFileSync(join(root, "node_modules", "ezllm", "package.json"), '{"name":"ezllm"}');
+    mkdirSync(join(root, "node_modules", "ezn"), { recursive: true });
+    writeFileSync(join(root, "node_modules", "ezn", "package.json"), '{"name":"ezn"}');
     expect(isFlatRuntimeReady(root)).toBe(false);
   });
 
@@ -281,7 +281,7 @@ describe("就绪判定（isFlatRuntimeReady，离线）", () => {
     expect(isFlatRuntimeReady(root)).toBe(true);
 
     // 自带 npm 落在 POSIX 候选位置（lib/node_modules）同样认
-    const libRoot = makeDir("ezllm-node-ready-lib-");
+    const libRoot = makeDir("ezn-ready-lib-");
     const libNode = join(libRoot, process.platform === "win32" ? "node.exe" : join("bin", "node"));
     mkdirSync(dirname(libNode), { recursive: true });
     writeFileSync(libNode, "NODE_BIN");
@@ -312,12 +312,12 @@ describe("落位（逐条目 + 共享目录按子项合并）——驱动真实 
 
   beforeEach(() => {
     setExtractSource(DEFAULT_SRC);
-    appDir = mkdtempSync(join(tmpdir(), "ezllm-node-flat-dst-"));
+    appDir = mkdtempSync(join(tmpdir(), "ezn-flat-dst-"));
     rt = join(appDir, "node");
     // 目标 = npm 已把托管包装好的运行时目录
-    mkdirSync(join(rt, "node_modules", "ezllm", "dist"), { recursive: true });
-    writeFileSync(join(rt, "node_modules", "ezllm", "package.json"), '{"name":"ezllm"}');
-    writeFileSync(join(rt, "node_modules", "ezllm", "dist", "server.js"), "SERVER_JS");
+    mkdirSync(join(rt, "node_modules", "ezn", "dist"), { recursive: true });
+    writeFileSync(join(rt, "node_modules", "ezn", "package.json"), '{"name":"ezn"}');
+    writeFileSync(join(rt, "node_modules", "ezn", "dist", "server.js"), "SERVER_JS");
   });
 
   afterEach(() => {
@@ -329,7 +329,7 @@ describe("落位（逐条目 + 共享目录按子项合并）——驱动真实 
   });
 
   it("包先装、node 后落位（目标只有已装包）→ 自带 npm/corepack 并入，包原样保留", async () => {
-    const pkgTree = listTree(join(rt, "node_modules", "ezllm"));
+    const pkgTree = listTree(join(rt, "node_modules", "ezn"));
 
     const { installNode } = await import("../src/install.js");
     await installNode(rt, "18");
@@ -337,9 +337,9 @@ describe("落位（逐条目 + 共享目录按子项合并）——驱动真实 
     expect(readFileSync(join(rt, "node.exe"), "utf8")).toBe("NODE_BIN");
     expect(readdirSync(rt).sort()).toEqual(["LICENSE", "README.md", "node.exe", "node_modules", "npm.cmd"]);
     // 共享目录按子项合并：自带包并入，目标独有的托管包原样
-    expect(readdirSync(join(rt, "node_modules")).sort()).toEqual(["corepack", "ezllm", "npm"]);
+    expect(readdirSync(join(rt, "node_modules")).sort()).toEqual(["corepack", "ezn", "npm"]);
     expect(readFileSync(join(rt, "node_modules", "npm", "bin", "npm-cli.js"), "utf8")).toBe("RUNTIME_NPM_CLI");
-    expect(listTree(join(rt, "node_modules", "ezllm"))).toEqual(pkgTree);
+    expect(listTree(join(rt, "node_modules", "ezn"))).toEqual(pkgTree);
     // 临时区（下载包 + 解压区）用完即清，不残留在 appDir
     expect(readdirSync(appDir).sort()).toEqual(["node"]);
   });
@@ -347,7 +347,7 @@ describe("落位（逐条目 + 共享目录按子项合并）——驱动真实 
   it("node 损坏/不达标 → 同名项备份为 <名>.old-<ts> 后覆盖，共享目录内已装包不受影响", async () => {
     writeFileSync(join(rt, "node.exe"), "BROKEN_NODE"); // 非可执行假文件
     writeFileSync(join(rt, "README.md"), "OLD_README");
-    const pkgTree = listTree(join(rt, "node_modules", "ezllm"));
+    const pkgTree = listTree(join(rt, "node_modules", "ezn"));
 
     const { installNode } = await import("../src/install.js");
     await installNode(rt, "18");
@@ -364,20 +364,20 @@ describe("落位（逐条目 + 共享目录按子项合并）——驱动真实 
     expect(readFileSync(join(rt, nodeBackup as string), "utf8")).toBe("BROKEN_NODE");
     expect(readFileSync(join(rt, readmeBackup as string), "utf8")).toBe("OLD_README");
     expect(new Set(backups.map((n) => n.split(".old-")[1])).size).toBe(1); // 同一次落位共用时间戳
-    expect(listTree(join(rt, "node_modules", "ezllm"))).toEqual(pkgTree);
+    expect(listTree(join(rt, "node_modules", "ezn"))).toEqual(pkgTree);
     // 关键安全语义：不做整目录备份（rt 自身绝不能被改名挪走）
     expect(readdirSync(appDir).some((n) => n.startsWith("node.old-"))).toBe(false);
     expect(existsSync(rt)).toBe(true);
   });
 
   it("共享目录内只存在于目标的子项（已装包）→ 不备份、不阻断落位", async () => {
-    const pkgTree = listTree(join(rt, "node_modules", "ezllm"));
+    const pkgTree = listTree(join(rt, "node_modules", "ezn"));
 
     const { installNode } = await import("../src/install.js");
     await installNode(rt, "18");
 
-    expect(readdirSync(join(rt, "node_modules")).sort()).toEqual(["corepack", "ezllm", "npm"]);
-    expect(listTree(join(rt, "node_modules", "ezllm"))).toEqual(pkgTree);
+    expect(readdirSync(join(rt, "node_modules")).sort()).toEqual(["corepack", "ezn", "npm"]);
+    expect(listTree(join(rt, "node_modules", "ezn"))).toEqual(pkgTree);
     expect(
       readdirSync(rt)
         .concat(readdirSync(join(rt, "node_modules")))
@@ -407,14 +407,14 @@ describe("落位（逐条目 + 共享目录按子项合并）——驱动真实 
 
   it("POSIX 多段合并路径：lib/node_modules 合并、lib 不被整体备份、lib 下其它内容走既有语义", async () => {
     // MERGE_PATHS 在模块加载时按 process.platform 决定，故覆写平台后重新加载模块
-    const posixRt = makeExtraDir("ezllm-node-flat-posix-");
+    const posixRt = makeExtraDir("ezn-flat-posix-");
     // 目标：托管包在 lib/node_modules 下（POSIX 官方 tar.gz 与 npm prefix 布局都如此）
-    mkdirSync(join(posixRt, "lib", "node_modules", "ezllm"), { recursive: true });
-    writeFileSync(join(posixRt, "lib", "node_modules", "ezllm", "package.json"), '{"name":"ezllm"}');
+    mkdirSync(join(posixRt, "lib", "node_modules", "ezn"), { recursive: true });
+    writeFileSync(join(posixRt, "lib", "node_modules", "ezn", "package.json"), '{"name":"ezn"}');
     // lib 下的普通内容：一个两边都有（走既有语义）、一个仅目标有（原地保留）
     writeFileSync(join(posixRt, "lib", "other.txt"), "OLD_LIB_OTHER");
     writeFileSync(join(posixRt, "lib", "keepme.txt"), "KEEP_ONLY_IN_TARGET");
-    const pkgTree = listTree(join(posixRt, "lib", "node_modules", "ezllm"));
+    const pkgTree = listTree(join(posixRt, "lib", "node_modules", "ezn"));
     setExtractSource({
       "bin/node": "NODE_BIN",
       "lib/node_modules/npm/bin/npm-cli.js": "RUNTIME_NPM_CLI",
@@ -441,7 +441,7 @@ describe("落位（逐条目 + 共享目录按子项合并）——驱动真实 
     expect(readdirSync(join(posixRt, "lib")).find((n) => n.startsWith("other.txt.old-"))).toBeTruthy();
     expect(readFileSync(join(posixRt, "lib", "keepme.txt"), "utf8")).toBe("KEEP_ONLY_IN_TARGET");
     // lib/node_modules 合并：自带包并入、托管包原样
-    expect(readdirSync(join(posixRt, "lib", "node_modules")).sort()).toEqual(["corepack", "ezllm", "npm"]);
-    expect(listTree(join(posixRt, "lib", "node_modules", "ezllm"))).toEqual(pkgTree);
+    expect(readdirSync(join(posixRt, "lib", "node_modules")).sort()).toEqual(["corepack", "ezn", "npm"]);
+    expect(listTree(join(posixRt, "lib", "node_modules", "ezn"))).toEqual(pkgTree);
   });
 });

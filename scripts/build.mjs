@@ -1,4 +1,4 @@
-// ezllm-node 包内构建：产出标准 npm 包形态的 dist/（CJS/ESM 双入口）
+// ezn 包内构建：产出标准 npm 包形态的 dist/（CJS/ESM 双入口）
 //   dist/index.js   —— esbuild bundle（CJS、target node16）：versions.json 内联，got/tar/extract-zip 保持 external require
 //   dist/index.mjs  —— ESM 包装入口：createRequire 走 CJS 加载实现后具名 re-export（规避 ESM 对 CJS
 //                      具名导出的静态分析限制——esbuild __export 模式 cjs-module-lexer 识别不了）
@@ -49,9 +49,9 @@ await build({
 //
 // ESM 包装入口（与 dist/index.js 同目录，相对 require 指向 CJS 实现）
 // 名单是硬编码的，必须与 src/index.ts 的运行期具名导出保持一致——漏项时 ESM 消费者
-// `import { x } from "ezllm-node"` 编译通过、运行期报 does not provide an export named；
+// `import { x } from "@doyzheng/ezn"` 编译通过、运行期报 does not provide an export named；
 // test/node.test.ts 有对齐断言把这类漂移钉住（新增导出时同步补这里 + 该断言会提醒）。
-const esmWrapper = `// 本文件由 ezllm-node 构建生成，请勿手改。ESM 入口：包装 CJS 实现并具名 re-export。
+const esmWrapper = `// 本文件由 ezn 构建生成，请勿手改。ESM 入口：包装 CJS 实现并具名 re-export。
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const { Node } = require("./index.js");
@@ -63,6 +63,6 @@ execSync("npx tsc -p tsconfig.build.json", { cwd: pkgRoot, stdio: "inherit" });
 // import 条件的类型声明：.d.ts 拷贝为 .d.mts（exports["."].import.types）
 copyFileSync(resolve(pkgRoot, "dist", "index.d.ts"), resolve(pkgRoot, "dist", "index.d.mts"));
 console.log(
-  "[ezllm-node] 构建完成：dist/index.js（CJS）+ dist/index.mjs（ESM 入口）+ dist/index.d.ts / .d.mts" +
+  "[ezn] 构建完成：dist/index.js（CJS）+ dist/index.mjs（ESM 入口）+ dist/index.d.ts / .d.mts" +
     " + dist/ezn.js（`ezn` 命令）",
 );

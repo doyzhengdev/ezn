@@ -1,5 +1,5 @@
 /**
- * @file 包入口（ezllm-node）：只做导出编排，不含任何实现。
+ * @file 包入口（ezn）：只做导出编排，不含任何实现。
  * @fileoverview
  * 公共 API 面只有 `Node` 类与 `SpawnAsyncResult`（Node 实例方法见 `./node.ts`）。包内实现分层：
  * - `./node.ts`——Node 类本体（运行时探测/复用决策、exec/npm/npx 执行封装）

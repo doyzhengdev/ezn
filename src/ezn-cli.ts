@@ -7,13 +7,13 @@
  *
  * 落位布局（**项目根下的 node/，与 node 官方发行包同构**）：
  * ```
- * <项目>/node/node.exe            ← 目录名可用 ezllm-node.dir 改写
+ * <项目>/node/node.exe            ← 目录名可用 ezn.dir 改写
  * ```
- * 项目根 = 向上就近找到的那个配置了 `ezllm-node.node` 的 `package.json` 所在目录。默认与官方发行
+ * 项目根 = 向上就近找到的那个配置了 `ezn.node` 的 `package.json` 所在目录。默认与官方发行
  * 包、以及上游服务端托管运行时所用的同一套布局（`<appDir>/node/node.exe`）同构，
  * 故整个项目只有一处「托管 Node」概念，不再有版本目录层。
  *
- * 版本只在 `package.json` 的 `ezllm-node.node` 里声明一次（自 cwd 向上就近查找），命令行不接
+ * 版本只在 `package.json` 的 `ezn.node` 里声明一次（自 cwd 向上就近查找），命令行不接
  * 版本参数——一个项目一个版本，故目录不按版本分层、也不存在「版本与命令撞名」的歧义。要换版本
  * 就改配置；换版本后 `installNode` 按逐条目安全语义覆盖（同名项备份后替换、共享目录按子项合并，
  * 绝不误删既有文件）。
@@ -48,7 +48,7 @@ const RUNTIME_DIR_NAME = "node";
 /**
  * 项目根目录：运行时落位到它下面。
  *
- * 取自向上就近找到的那个配置了 `ezllm-node` 的 package.json 所在目录；一路到盘根都没配置时
+ * 取自向上就近找到的那个配置了 `ezn` 的 package.json 所在目录；一路到盘根都没配置时
  * 回落到 startDir（此时 `parseInvocation` 会给出可操作错误，不会走到落位）。
  *
  * @param startDir - 起始目录（缺省 cwd；显式传入供单测隔离，避免落到真实仓库目录）
@@ -60,13 +60,13 @@ export function projectRoot(startDir: string = process.cwd()): string {
 }
 
 /**
- * 解析出运行时目录（`<项目根>/<ezllm-node.dir | "node">`）。
+ * 解析出运行时目录（`<项目根>/<ezn.dir | "node">`）。
  *
  * 目录不随版本变化：`get-node`/nve 那种「缓存多版本」的形态在这里不需要——版本由
- * `ezllm-node.node` 唯一定义，`installNode` 落位时按逐条目安全语义覆盖旧运行时即可。
+ * `ezn.node` 唯一定义，`installNode` 落位时按逐条目安全语义覆盖旧运行时即可。
  * `platformKey` 仍返回，供诊断与锁名区分异构目标。
  *
- * 目录名由 `ezllm-node.dir` 决定（省略则用默认的 `node`）。**只接受相对路径**：绝对路径与 `..`
+ * 目录名由 `ezn.dir` 决定（省略则用默认的 `node`）。**只接受相对路径**：绝对路径与 `..`
  * 逃逸都拒绝——安装位置恒在所配置项目内，与「运行时随项目走、删目录即清理」的取舍保持一致。
  *
  * @param spec - 版本描述（"22" | "22.13" | "22.13.0"）
@@ -88,7 +88,7 @@ export function resolveRuntimeDir(
   const name = configured?.config.dir;
   if (name && (isAbsolute(name) || name.split(/[\\/]/).includes(".."))) {
     throw new Error(
-      `ezllm-node.dir 只接受项目内的相对路径（如 "runtime" / ".node"），收到：${name}\n` +
+      `ezn.dir 只接受项目内的相对路径（如 "runtime" / ".node"），收到：${name}\n` +
         "运行时随项目走（删目录即清理），故不允许指向项目之外。",
     );
   }
@@ -147,14 +147,14 @@ export async function acquireLock(lockDir: string, nodeDir: string): Promise<boo
 /**
  * 确保某个版本的托管 Node 就绪（复用 / 加锁落位）。
  *
- * 环境变量 `ELLM_NODE_BIN` 是逃生口（与库的 `Node.ensure` 同一语义）：显式指定一个现成的 node
+ * 环境变量 `EZN_NODE_BIN` 是逃生口（与库的 `Node.ensure` 同一语义）：显式指定一个现成的 node
  * 可执行文件，跳过复用判定与下载落位。此时的 `dir` 取该可执行文件所在目录——它决定子进程 PATH
  * 的前缀，即「命令内部再调 node 时命中哪一份」。
  *
  * @param spec - 版本描述（"22" | "22.13" | "22.13.0"）
  * @param startDir - 起始目录（缺省 cwd；显式传入供单测隔离，避免落到真实仓库目录）
  * @returns 精确版本、运行时目录（PATH 前缀来源）、node 可执行文件绝对路径
- * @throws 版本非法/无匹配；`ELLM_NODE_BIN` 指向的 node 不存在；平台不支持；下载失败；落位失败
+ * @throws 版本非法/无匹配；`EZN_NODE_BIN` 指向的 node 不存在；平台不支持；下载失败；落位失败
  */
 export async function ensureRuntime(
   spec: string,
@@ -162,11 +162,11 @@ export async function ensureRuntime(
 ): Promise<{ version: string; dir: string; nodePath: string }> {
   const { version, dir } = resolveRuntimeDir(spec, startDir);
 
-  const override = process.env.ELLM_NODE_BIN;
+  const override = process.env.EZN_NODE_BIN;
   if (override) {
     const nodePath = resolve(override);
-    if (!existsSync(nodePath)) throw new Error(`ELLM_NODE_BIN 指定的 Node 不存在：${nodePath}`);
-    console.error(`[ezn] 使用 ELLM_NODE_BIN 指定的 Node：${nodePath}`);
+    if (!existsSync(nodePath)) throw new Error(`EZN_NODE_BIN 指定的 Node 不存在：${nodePath}`);
+    console.error(`[ezn] 使用 EZN_NODE_BIN 指定的 Node：${nodePath}`);
     return { version, dir: dirname(nodePath), nodePath };
   }
 
@@ -204,7 +204,7 @@ function resolveInRuntime(dir: string, name: string): string | null {
 /**
  * 从 cwd 起逐级向上查找 `node_modules/.bin/<name>`。
  *
- * 用途：`ezn vitest run` 里的 `vitest` 由**本仓库**安装，`ezn` 自身不依赖它。经 pnpm 脚本调用时
+ * 用途：`ezn vitest run` 里的 `vitest` 由**项目**安装，`ezn` 自身不依赖它。经包管理器脚本调用时
  * PATH 里已有 `<包>/node_modules/.bin` 与根 `.bin`（实测），本函数对那种场景是冗余的；但直接在
  * shell 里裸调（不经 pnpm）时 PATH 里没有，得靠这里兜住。
  *
@@ -307,7 +307,7 @@ export function childPath(dir: string, basePath?: string): string {
   return entries.join(delimiter) + delimiter + base;
 }
 
-/** `package.json` 里 `ezllm-node` 段的形态。 */
+/** `package.json` 里 `ezn` 段的形态。 */
 export interface PinnedNode {
   /** 版本描述：`"22"` | `"22.13"` | `"22.13.5"`（1~3 段数字，须在内置版本表内） */
   node: string;
@@ -316,7 +316,7 @@ export interface PinnedNode {
 }
 
 /**
- * 读取 `package.json` 里的 node 配置（`"ezllm-node": { "node": "22", "dir": "runtime" }`）。
+ * 读取 `package.json` 里的 node 配置（`"ezn": { "node": "22", "dir": "runtime" }`）。
  *
  * 键名刻意**不用 `engines.node`**：那是「兼容范围」语义（本包自己就写着 `>=16` 的壳包基线），
  * 与「跑脚本时固定用哪个版本」是两回事；混用会让 `ezn` 在写了 `>=16` 的包里解析出 `16` 或直接报错。
@@ -326,8 +326,8 @@ export interface PinnedNode {
  */
 export function readPinnedNode(pkgPath: string): PinnedNode | null {
   try {
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { "ezllm-node"?: { node?: unknown; dir?: unknown } };
-    const section = pkg["ezllm-node"];
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { "ezn"?: { node?: unknown; dir?: unknown } };
+    const section = pkg["ezn"];
     const node = section?.node;
     if (typeof node === "string" && node.trim() !== "") {
       const dir = typeof section?.dir === "string" && section.dir.trim() !== "" ? section.dir.trim() : null;
@@ -340,7 +340,7 @@ export function readPinnedNode(pkgPath: string): PinnedNode | null {
 }
 
 /**
- * 从 startDir 起逐级向上查找 `package.json` 的 `ezllm-node` 配置，返回**最近的一个**。
+ * 从 startDir 起逐级向上查找 `package.json` 的 `ezn` 配置，返回**最近的一个**。
  *
  * 就近优先：`ezn vitest run` 在子包里执行时用该子包的配置，在仓库根执行时用根的配置——
  * 与 `.nvmrc` / `.node-version` 的查找语义一致。缺配置时继续向上找，一路到盘根都没有则返回 null。
@@ -376,25 +376,25 @@ const USAGE = [
   "  ezn --version                打印 ezn 自身版本",
   "",
   "配置（package.json，自当前目录向上就近查找）：",
-  '  "ezllm-node": { "node": "22", "dir": "node" }',
+  '  "ezn": { "node": "22", "dir": "node" }',
   "  node  版本，只在此处声明一次——一个项目一个版本，命令行不接版本参数。",
   "  dir   安装目录名（相对项目根，可省略，默认 node）；须在 .gitignore 忽略。",
   "  不复用 engines.node：那是兼容范围语义（本包壳包基线写着 >=16），混用会解析错版本。",
   "",
   "版本取值：18 | 18.1 | 18.1.5（1~3 段数字，须在内置版本表内）",
-  "环境变量：ELLM_NODE_MIRROR（下载镜像）、ELLM_NODE_BIN（跳过下载，用指定 node）",
+  "环境变量：EZN_NODE_MIRROR（下载镜像）、EZN_NODE_BIN（跳过下载，用指定 node）",
 ].join("\n");
 
 /**
  * 定出本次要用的 node 版本描述与要执行的命令。
  *
- * 版本只能来自 `package.json` 的 `ezllm-node.node`（自 cwd 向上就近查找）——一个项目一个版本，
+ * 版本只能来自 `package.json` 的 `ezn.node`（自 cwd 向上就近查找）——一个项目一个版本，
  * 命令行不接版本参数，故不存在「版本与命令撞名」的歧义，也不需要 `--` 消歧。
  *
  * @param args - 已剔除 `--` / `--help` / `--version` 的参数
  * @param startDir - 起始目录（缺省 cwd；显式传入供单测隔离，避免落到真实仓库目录）
  * @returns 版本描述与命令参数
- * @throws 未配置 `ezllm-node.node` 时的可操作错误
+ * @throws 未配置 `ezn.node` 时的可操作错误
  */
 export function parseInvocation(
   args: readonly string[],
@@ -418,9 +418,9 @@ export function parseInvocation(
  */
 export function missingConfigMessage(startDir: string): string {
   return [
-    `未找到 node 版本配置：自 ${resolve(startDir)} 向上各级 package.json 均无 ezllm-node.node。`,
+    `未找到 node 版本配置：自 ${resolve(startDir)} 向上各级 package.json 均无 ezn.node。`,
     "请在项目 package.json 里声明（一个项目一个版本）：",
-    '  "ezllm-node": { "node": "22", "dir": "node" }',
+    '  "ezn": { "node": "22", "dir": "node" }',
     "  node  版本（必填）；dir 安装目录名（可省略，默认 node）。",
     "注意不复用 engines.node——那是兼容范围语义（本包自身就写着 >=16）。",
   ].join("\n");
@@ -449,7 +449,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   const { version, dir, nodePath } = await ensureRuntime(spec);
   if (rest.length === 0) {
     // 诊断模式：命令可省略，只报告本次会用的运行时
-    console.error(`[ezn] Node 版本：${version}（配置 ezllm-node.node = ${spec}）`);
+    console.error(`[ezn] Node 版本：${version}（配置 ezn.node = ${spec}）`);
     console.error(`[ezn] 运行时目录：${dir}`);
     console.error(`[ezn] node 可执行文件：${nodePath}`);
     return 0;

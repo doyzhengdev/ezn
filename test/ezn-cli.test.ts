@@ -1,8 +1,8 @@
-// ezllm-node `ezn` 命令单测（离线）：配置解析、运行时目录推导、就绪判定、并发落位锁、命令解析、PATH 前置。
+// ezn `ezn` 命令单测（离线）：配置解析、运行时目录推导、就绪判定、并发落位锁、命令解析、PATH 前置。
 // 真下载 / 真执行由冒烟覆盖，此处不触网、不起进程。
 //
 // ⚠ 隔离要求：一律经 startDir 参数把落位根钉在 tmpRoot 内，**不要**依赖 cwd。
-// 这里曾靠切换 cwd 驱动，逃生口（ELLM_N_CACHE）被删后失去隔离，直接把真实仓库目录
+// 这里曾靠切换 cwd 驱动，逃生口（EZN_N_CACHE）被删后失去隔离，直接把真实仓库目录
 // <repo>/node/node.exe 覆写成了 4 字节的 "FAKE"。startDir 参数就是为了根除这类事故。
 
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -48,7 +48,7 @@ function fakeRuntime(dir: string): string {
 }
 
 beforeEach(() => {
-  tmpRoot = mkdtempSync(join(tmpdir(), "ezllm-n-test-"));
+  tmpRoot = mkdtempSync(join(tmpdir(), "ezn-n-test-"));
   installNodeMock.mockClear();
 });
 
@@ -56,16 +56,16 @@ afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-describe("配置读取（ezllm-node.node / .dir）", () => {
+describe("配置读取（ezn.node / .dir）", () => {
   const cfg = (node: string, dir?: string) => ({ node, dir: dir ?? null });
 
   it("读取 node；未配 dir → null（表示用默认目录名）", () => {
-    writePkg(tmpRoot, { "ezllm-node": { node: "24" } });
+    writePkg(tmpRoot, { "ezn": { node: "24" } });
     expect(readPinnedNode(join(tmpRoot, "package.json"))).toEqual(cfg("24"));
   });
 
   it("读取 dir（自定义安装目录名）", () => {
-    writePkg(tmpRoot, { "ezllm-node": { node: "24", dir: "runtime" } });
+    writePkg(tmpRoot, { "ezn": { node: "24", dir: "runtime" } });
     expect(readPinnedNode(join(tmpRoot, "package.json"))).toEqual(cfg("24", "runtime"));
   });
 
@@ -84,16 +84,16 @@ describe("配置读取（ezllm-node.node / .dir）", () => {
   });
 
   it("向上查找取**最近**的一个配置", () => {
-    writePkg(tmpRoot, { "ezllm-node": { node: "22" } });
+    writePkg(tmpRoot, { "ezn": { node: "22" } });
     const nested = join(tmpRoot, "packages", "server");
-    writePkg(nested, { "ezllm-node": { node: "24" } });
+    writePkg(nested, { "ezn": { node: "24" } });
     expect(resolveConfiguredNode(nested)).toEqual({ config: cfg("24"), root: nested });
     // 该层无配置 → 向上取根的那份
     expect(resolveConfiguredNode(join(tmpRoot, "packages"))).toEqual({ config: cfg("22"), root: tmpRoot });
   });
 
   it("dir 省略时为 null，表示用默认目录名", () => {
-    writePkg(tmpRoot, { "ezllm-node": { node: "24" } });
+    writePkg(tmpRoot, { "ezn": { node: "24" } });
     expect(resolveConfiguredNode(tmpRoot)?.config.dir).toBeNull();
   });
 
@@ -106,7 +106,7 @@ describe("配置读取（ezllm-node.node / .dir）", () => {
 
 describe("运行时目录推导", () => {
   it("默认恒为 <项目根>/node（官方发行包同构，不按版本分目录）", () => {
-    writePkg(tmpRoot, { "ezllm-node": { node: "22" } });
+    writePkg(tmpRoot, { "ezn": { node: "22" } });
     const { version, platformKey, dir } = resolveRuntimeDir("22", tmpRoot);
     expect(version).toMatch(/^v22\.\d+\.\d+$/);
     expect(platformKey).toBe(nodePlatformKey());
@@ -116,7 +116,7 @@ describe("运行时目录推导", () => {
   });
 
   it("项目根 = 配置所在目录（就近向上），而非 startDir 本身", () => {
-    writePkg(tmpRoot, { "ezllm-node": { node: "24" } });
+    writePkg(tmpRoot, { "ezn": { node: "24" } });
     const nested = join(tmpRoot, "packages", "server");
     mkdirSync(nested, { recursive: true });
     expect(projectRoot(nested)).toBe(tmpRoot);
@@ -130,17 +130,17 @@ describe("运行时目录推导", () => {
   });
 
   it("dir → <项目根>/<dir>（支持多级相对路径）", () => {
-    writePkg(tmpRoot, { "ezllm-node": { node: "24", dir: "runtime" } });
+    writePkg(tmpRoot, { "ezn": { node: "24", dir: "runtime" } });
     expect(resolveRuntimeDir("24", tmpRoot).dir).toBe(join(tmpRoot, "runtime"));
 
-    writePkg(tmpRoot, { "ezllm-node": { node: "24", dir: ".tools/node" } });
+    writePkg(tmpRoot, { "ezn": { node: "24", dir: ".tools/node" } });
     expect(resolveRuntimeDir("24", tmpRoot).dir).toBe(join(tmpRoot, ".tools", "node"));
   });
 
   it("dir 为绝对路径 / .. 逃逸 → 抛可操作错误（运行时必须随项目走）", () => {
     for (const bad of ["C:\\elsewhere", "/elsewhere", "../outside", "a/../../b"]) {
-      writePkg(tmpRoot, { "ezllm-node": { node: "24", dir: bad } });
-      expect(() => resolveRuntimeDir("24", tmpRoot)).toThrow(/ezllm-node\.dir/);
+      writePkg(tmpRoot, { "ezn": { node: "24", dir: bad } });
+      expect(() => resolveRuntimeDir("24", tmpRoot)).toThrow(/ezn\.dir/);
     }
   });
 
@@ -158,7 +158,7 @@ describe("运行时目录推导", () => {
 });
 
 describe("就绪判定与复用", () => {
-  beforeEach(() => writePkg(tmpRoot, { "ezllm-node": { node: "22" } }));
+  beforeEach(() => writePkg(tmpRoot, { "ezn": { node: "22" } }));
 
   it("node 可执行文件在位 → 就绪（isReady 为真且 ensureRuntime 不落位）", async () => {
     const { dir } = resolveRuntimeDir("22", tmpRoot);
@@ -191,26 +191,26 @@ describe("就绪判定与复用", () => {
     expect(existsSync(`${dir}.lock`)).toBe(false);
   });
 
-  it("ELLM_NODE_BIN 生效：跳过落位，path 取指定 node，dir 取其所在目录", async () => {
+  it("EZN_NODE_BIN 生效：跳过落位，path 取指定 node，dir 取其所在目录", async () => {
     const fake = fakeRuntime(join(tmpRoot, "elsewhere"));
-    process.env.ELLM_NODE_BIN = fake;
+    process.env.EZN_NODE_BIN = fake;
     try {
       const out = await ensureRuntime("22", tmpRoot);
       expect(out.nodePath).toBe(fake);
       expect(out.dir).toBe(join(tmpRoot, "elsewhere"));
       expect(installNodeMock).not.toHaveBeenCalled();
     } finally {
-      delete process.env.ELLM_NODE_BIN;
+      delete process.env.EZN_NODE_BIN;
     }
   });
 
-  it("ELLM_NODE_BIN 指向不存在的路径 → 抛错（不静默回落下载）", async () => {
-    process.env.ELLM_NODE_BIN = join(tmpRoot, "no-such-node.exe");
+  it("EZN_NODE_BIN 指向不存在的路径 → 抛错（不静默回落下载）", async () => {
+    process.env.EZN_NODE_BIN = join(tmpRoot, "no-such-node.exe");
     try {
-      await expect(ensureRuntime("22", tmpRoot)).rejects.toThrow(/ELLM_NODE_BIN/);
+      await expect(ensureRuntime("22", tmpRoot)).rejects.toThrow(/EZN_NODE_BIN/);
       expect(installNodeMock).not.toHaveBeenCalled();
     } finally {
-      delete process.env.ELLM_NODE_BIN;
+      delete process.env.EZN_NODE_BIN;
     }
   });
 });
@@ -232,7 +232,7 @@ describe("并发落位锁", () => {
   });
 
   it("锁被占用且运行时就绪 → 不夺锁、不落位", async () => {
-    writePkg(tmpRoot, { "ezllm-node": { node: "22" } });
+    writePkg(tmpRoot, { "ezn": { node: "22" } });
     const { dir } = resolveRuntimeDir("22", tmpRoot);
     fakeRuntime(dir);
     mkdirSync(`${dir}.lock`, { recursive: true }); // 模拟另一进程持锁
@@ -291,7 +291,7 @@ describe("命令解析", () => {
 });
 
 describe("参数解析（版本只来自配置，命令行不接版本）", () => {
-  beforeEach(() => writePkg(tmpRoot, { "ezllm-node": { node: "24" } }));
+  beforeEach(() => writePkg(tmpRoot, { "ezn": { node: "24" } }));
 
   it("版本取自配置，命令与参数原样透传", () => {
     expect(parseInvocation(["vitest", "run"], tmpRoot)).toEqual({ spec: "24", rest: ["vitest", "run"] });
@@ -315,7 +315,7 @@ describe("参数解析（版本只来自配置，命令行不接版本）", () =
   it("找不到配置的报错文案：带出查找起点、给出必填项与目录说明", () => {
     const msg = missingConfigMessage(join(tmpRoot, "no-such-dir"));
     expect(msg).toMatch(/no-such-dir/); // 起点，便于定位
-    expect(msg).toMatch(/ezllm-node/);
+    expect(msg).toMatch(/ezn/);
     expect(msg).toMatch(/engines\.node/); // 明确说明为何不复用 engines
   });
 });

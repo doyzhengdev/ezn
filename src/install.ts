@@ -4,7 +4,7 @@
  * 只导出 `installNode(nodeDir, nodeVersion)`——「装到哪」由调用者决定（`Node.ensure` 传 `<appDir>/node`）。
  *
  * **落位一律逐条目进行**，绝不删除 nodeDir 内既有的、与本次安装无关的文件：运行时目录同时装着
- * npm 安装的托管包（`<nodeDir>/node_modules/ezllm`），整目录覆盖或清空会把包一并抹掉，服务随即
+ * npm 安装的托管包（`<nodeDir>/node_modules/ezn`），整目录覆盖或清空会把包一并抹掉，服务随即
  * 找不到自身入口 `server.js`。共享目录（node 自带包与托管包同处一处）按子项合并，目标独有的子项
  * 原地不动。
  *
@@ -43,7 +43,7 @@ const MERGE_PATHS: readonly (readonly string[])[] = IS_WIN ? [["node_modules"]] 
 /**
  * 下载 + 解压内置表指定版本的 Node，返回「已去掉顶层版本目录」的内容目录（位于 workDir 内）。
  *
- * - 镜像顺序：`ELLM_NODE_MIRROR` > registry.npmmirror.com > nodejs.org，逐个重试
+ * - 镜像顺序：`EZN_NODE_MIRROR` > registry.npmmirror.com > nodejs.org，逐个重试
  * - 临时区（压缩包 + 解压区）建在 workDir 下——与最终目标同盘，保证后续 rename 不跨盘 EXDEV
  * - 调用方把 src 搬走/落位后**必须**调用 `cleanup()`
  *
@@ -67,7 +67,7 @@ async function downloadExtract(
   };
 
   const mirrors: string[] = [];
-  const customMirror = process.env.ELLM_NODE_MIRROR;
+  const customMirror = process.env.EZN_NODE_MIRROR;
   if (customMirror) mirrors.push(customMirror.replace(/\/+$/, ""));
   mirrors.push("https://registry.npmmirror.com/-/binary/node", "https://nodejs.org/dist");
 
@@ -78,7 +78,7 @@ async function downloadExtract(
   for (let i = 0; i < mirrors.length; i++) {
     const mirror = mirrors[i] as string;
     const url = `${mirror}/${nodeVersion}/${filename}`;
-    console.error(`[ezllm-node] (${i + 1}/${mirrors.length}) 正在下载 ${filename}\n[ezllm-node]   来源：${mirror}`);
+    console.error(`[ezn] (${i + 1}/${mirrors.length}) 正在下载 ${filename}\n[ezn]   来源：${mirror}`);
     try {
       // 流式下载（got@11 stream）：自动跟随重定向（≤10）、连接类错误自动重试；decompress 关闭保证
       // 字节原样落盘（.zip/.tar.gz 本体自含压缩，不能被 content-encoding 二次解压）；socket 60 秒
@@ -90,13 +90,13 @@ async function downloadExtract(
       });
       source.on("downloadProgress", (progress) => {
         if (progress.transferred >= nextMark) {
-          console.error(`[ezllm-node]   已下载 ${Math.round(progress.transferred / 1048576)} MB ...`);
+          console.error(`[ezn]   已下载 ${Math.round(progress.transferred / 1048576)} MB ...`);
           nextMark += 20 * 1024 * 1024;
         }
       });
       await pipeline(source, createWriteStream(tmpArchive));
 
-      console.error("[ezllm-node] 下载完成，正在解压 ...");
+      console.error("[ezn] 下载完成，正在解压 ...");
       // 解压：zip → extract-zip（yauzl 内核，条目路径防穿越）；tar.gz → tar@6（纯 JS，从文件读取
       // 时按内容嗅探 gzip，unix 下软链接与执行位照常保留）。按 NODE_PLATFORMS 声明的格式分流而非
       // 按扩展名——下载临时文件无扩展名。
@@ -115,7 +115,7 @@ async function downloadExtract(
       rmSync(tmpArchive, { force: true }); // 压缩包用完即删；解压区留给调用方搬运
       return { src, cleanup };
     } catch (err) {
-      console.error(`[ezllm-node] 该源失败：${err instanceof Error ? err.message : String(err)}`);
+      console.error(`[ezn] 该源失败：${err instanceof Error ? err.message : String(err)}`);
       // 压缩包与解压区一并重置：否则上一源的半截解压内容会污染下一源的解压结果。
       rmSync(tmpArchive, { force: true });
       rmSync(extractDir, { recursive: true, force: true });
@@ -130,7 +130,7 @@ async function downloadExtract(
       "可尝试的恢复方式：",
       "  1. 检查网络后重试；",
       "  2. 设置私有镜像（目录结构需同 nodejs.org/dist）后重试，例如：",
-      "       set ELLM_NODE_MIRROR=https://your-mirror.example/node-dist",
+      "       set EZN_NODE_MIRROR=https://your-mirror.example/node-dist",
       `  3. 手动放置：下载 ${filename}（见 ${officialBase}/${nodeVersion}/），`,
       `     解压到 ${opts.target}（如带顶层版本目录请把其内容上移一层），`,
       `     确保可执行文件位于 ${opts.nodePath}。`,
@@ -168,7 +168,7 @@ function landEntry(
   if (existsSync(destPath)) {
     const backup = `${destPath}.old-${stamp}`;
     renameSync(destPath, backup);
-    console.error(`[ezllm-node] 同名项已备份：${backup}`);
+    console.error(`[ezn] 同名项已备份：${backup}`);
   }
   renameSync(srcPath, destPath); // 同盘 rename（src 在 dir 内），无 EXDEV
 }
@@ -222,5 +222,5 @@ export async function installNode(nodeDir: string, nodeVersion: string): Promise
     // 失败时保留 dir 现场已落位的部分供排查（不回滚——回滚可能删掉已被覆盖的文件）
     cleanup();
   }
-  console.error(`[ezllm-node] Node ${fullVersion} 已就绪：${dir}`);
+  console.error(`[ezn] Node ${fullVersion} 已就绪：${dir}`);
 }

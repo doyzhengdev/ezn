@@ -13,7 +13,7 @@ npx @doyzheng/ezn vitest run     # 在该 Node 上跑测试
 
 ```json
 {
-  "ezllm-node": { "node": "22" }
+  "ezn": { "node": "22" }
 }
 ```
 
@@ -60,11 +60,11 @@ npm install -D @doyzheng/ezn
 
 ## 配置
 
-在**项目根**的 `package.json` 里加一段 `ezllm-node`：
+在**项目根**的 `package.json` 里加一段 `ezn`：
 
 ```json
 {
-  "ezllm-node": {
+  "ezn": {
     "node": "22",
     "dir": "node"
   }
@@ -80,7 +80,7 @@ npm install -D @doyzheng/ezn
 
 写 `"22"` 而不是 `"22.13.5"` 通常更好：ezn 会在内置版本表里按**组件级前缀**匹配到该主版本最新的一个 patch（`"22"` → `v22.23.2`），等于自动拿到安全更新。写全三段则精确锁定。注意 `"22.1"` **不会**匹配到 `22.13.x`——前缀是逐段比对的。
 
-> ⚠️ **`ezllm-node` 这个配置键名是历史遗留**，取自本项目的来源仓库，与包名 `@doyzheng/ezn` 不一致。之所以还没改，是因为它是**破坏性的**：改名会让所有既有项目的配置失效。计划在 `1.0.0` 时统一改为 `ezn`，届时会同时支持两个键名并给出迁移提示。
+> ⚠️ **`0.1.0` 起配置键名由 `ezllm-node` 改为 `ezn`**，与包名一致。旧键名**不再被读取**，既有项目需手工改名：把 `package.json` 里的 `"ezllm-node"` 段整体改名为 `"ezn"`。
 
 **务必把运行时目录加进 `.gitignore`**，否则上百 MB 的运行时会被 git 追踪：
 
@@ -117,10 +117,10 @@ npm install -D @doyzheng/ezn
 
 | 变量 | 作用 |
 |---|---|
-| `ELLM_NODE_MIRROR` | 下载镜像。目录结构需与 `nodejs.org/dist` 一致 |
-| `ELLM_NODE_BIN` | 逃生口：指定一个现成的 node 可执行文件，跳过下载与落位 |
+| `EZN_NODE_MIRROR` | 下载镜像。目录结构需与 `nodejs.org/dist` 一致 |
+| `EZN_NODE_BIN` | 逃生口：指定一个现成的 node 可执行文件，跳过下载与落位 |
 
-默认下载源按顺序为 `ELLM_NODE_MIRROR` → `registry.npmmirror.com` → `nodejs.org`，逐个重试。国内网络下开箱可用。
+默认下载源按顺序为 `EZN_NODE_MIRROR` → `registry.npmmirror.com` → `nodejs.org`，逐个重试。国内网络下开箱可用。
 
 ## 编程接口
 

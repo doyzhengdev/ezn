@@ -35,7 +35,7 @@ export function matchNodeVersion(spec: string): string {
   });
   if (!hit) {
     throw new Error(
-      `ezllm-node 内置版本表无匹配 Node ${spec} 的版本（当前内置：` +
+      `ezn 内置版本表无匹配 Node ${spec} 的版本（当前内置：` +
         `${available.map(([major, entry]) => `${major}=${entry.version}`).join("、")}）。` +
         `可改传主版本号（如 18），或经 scripts/update-node-assets.mjs 更新版本表。`,
     );

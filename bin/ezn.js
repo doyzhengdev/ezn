@@ -26,7 +26,7 @@ if (!existsSync(entry)) {
       "[ezn] 未找到构建产物：dist/ezn.js",
       "可尝试的恢复方式：",
       "  1. 在仓库根执行：npm run build",
-      "  2. 或用 npx 直接跑发布版（无需本地构建）：npx ezn <命令>",
+      "  2. 或用 npx 直接跑发布版（无需本地构建）：npx @doyzheng/ezn <命令>",
       "（dist/ 是构建产物、不入库，从源码 clone 后需先构建一次。）",
     ].join("\n"),
   );

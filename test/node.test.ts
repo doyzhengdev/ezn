@@ -1,5 +1,5 @@
-// ezllm-node 单测（离线）：主版本探测、版本描述匹配、ensure 守卫、内置版本表形态、执行封装基本语义。
-// 涉及真实下载/解压的链路由壳包引导器 e2e（临时 ELLM_APP_DIR 三分支实测）覆盖，此处不做网络 I/O。
+// ezn 单测（离线）：主版本探测、版本描述匹配、ensure 守卫、内置版本表形态、执行封装基本语义。
+// 涉及真实下载/解压的链路由壳包引导器 e2e（临时 EZN_APP_DIR 三分支实测）覆盖，此处不做网络 I/O。
 
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,7 +24,7 @@ describe("Node.probeMajor", () => {
   });
 
   it("不存在的路径 → null（不可执行）", () => {
-    expect(Node.probeMajor(join(tmpdir(), "ezllm-node-nonexistent", "node.exe"))).toBeNull();
+    expect(Node.probeMajor(join(tmpdir(), "ezn-nonexistent", "node.exe"))).toBeNull();
   });
 });
 
@@ -144,7 +144,7 @@ describe("命令行字符串形式（空白拆分 + node/npm/npx 首词分发）
   let node: Node;
 
   beforeEach(() => {
-    rt = mkdtempSync(join(tmpdir(), "ezllm-node-test-"));
+    rt = mkdtempSync(join(tmpdir(), "ezn-test-"));
     mkdirSync(join(rt, "node_modules", "npm", "bin"), { recursive: true });
     writeFileSync(
       join(rt, "node_modules", "npm", "bin", "npm-cli.js"),
@@ -201,21 +201,21 @@ describe("Node.ensure 守卫（不触发下载）", () => {
   let tmpRoot: string;
 
   beforeEach(() => {
-    tmpRoot = mkdtempSync(join(tmpdir(), "ezllm-node-test-"));
+    tmpRoot = mkdtempSync(join(tmpdir(), "ezn-test-"));
   });
 
   afterEach(() => {
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  // 以 process.env 存取 ELLM_NODE_BIN（逃生口现仅经环境变量注入），逐例保存/恢复
+  // 以 process.env 存取 EZN_NODE_BIN（逃生口现仅经环境变量注入），逐例保存/恢复
   function withNodeBin(value: string | undefined, fn: () => unknown): Promise<unknown> | unknown {
-    const prev = process.env.ELLM_NODE_BIN;
-    if (value === undefined) delete process.env.ELLM_NODE_BIN;
-    else process.env.ELLM_NODE_BIN = value;
+    const prev = process.env.EZN_NODE_BIN;
+    if (value === undefined) delete process.env.EZN_NODE_BIN;
+    else process.env.EZN_NODE_BIN = value;
     const done = (result: unknown) => {
-      if (prev === undefined) delete process.env.ELLM_NODE_BIN;
-      else process.env.ELLM_NODE_BIN = prev;
+      if (prev === undefined) delete process.env.EZN_NODE_BIN;
+      else process.env.EZN_NODE_BIN = prev;
       return result;
     };
     try {
@@ -245,9 +245,9 @@ describe("Node.ensure 守卫（不触发下载）", () => {
     });
   });
 
-  it("ELLM_NODE_BIN 指向不存在路径 → 抛错", async () => {
+  it("EZN_NODE_BIN 指向不存在路径 → 抛错", async () => {
     await withNodeBin(join(tmpRoot, "no-such-node"), async () => {
-      await expect(Node.ensure(tmpRoot, "18")).rejects.toThrow(/ELLM_NODE_BIN/);
+      await expect(Node.ensure(tmpRoot, "18")).rejects.toThrow(/EZN_NODE_BIN/);
     });
   });
 
