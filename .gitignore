@@ -1,0 +1,14 @@
+node_modules/
+
+# 构建产物（dist/ 是唯一编译事实源，但不入库；发布时由 prepack 重新构建）
+dist/
+
+# ezn 落位的托管 Node 运行时：<配置所在目录>/node/
+# 约 100MB，随项目走、删目录即清理，绝不能入库。
+/node/
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+*.log

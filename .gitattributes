@@ -1,0 +1,10 @@
+# 统一换行符为 LF，避免 Windows 提交时把源码改成 CRLF 产生整文件 diff
+* text=auto eol=lf
+
+# 二进制文件不做换行符转换
+*.tgz binary
+*.zip binary
+*.gz binary
+
+# lockfile 在 diff / 合并时按生成物对待
+package-lock.json -diff linguist-generated

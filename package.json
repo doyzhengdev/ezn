@@ -1,0 +1,75 @@
+{
+  "name": "ezn",
+  "version": "0.0.1",
+  "description": "在项目固定版本的托管 Node 上执行任意命令：按需下载/落位 Node 运行时，零系统依赖（npx nve 22 的替代）",
+  "license": "MIT",
+  "type": "commonjs",
+  "bin": {
+    "ezn": "bin/ezn.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "node",
+    "nodejs",
+    "runtime",
+    "version-manager",
+    "node-version",
+    "pinned-version",
+    "nvm",
+    "nve",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doyzhengdev/ezn.git"
+  },
+  "homepage": "https://github.com/doyzhengdev/ezn#readme",
+  "bugs": {
+    "url": "https://github.com/doyzhengdev/ezn/issues"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepack": "node scripts/build.mjs",
+    "prepublishOnly": "npm test",
+    "typecheck": "tsc",
+    "update-assets": "node scripts/update-node-assets.mjs",
+    "test": "node scripts/build.mjs && npx vitest run"
+  },
+  "dependencies": {
+    "extract-zip": "^2.0.1",
+    "got": "^11.8.6",
+    "tar": "^6.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/tar": "^6.1.13",
+    "esbuild": "^0.25.12",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}
