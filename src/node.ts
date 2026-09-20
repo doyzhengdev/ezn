@@ -6,7 +6,7 @@
  * 与 node 自带包同处一个共享目录——故落位一律逐条目进行、共享目录按子项合并，**绝不整目录
  * 让位或清空**（否则已装的托管包被抹掉，服务随即找不到自身入口 `server.js`）。落位见 `./install.ts`。
  *
- * `nodeVersion` 与 args 的语义、环境变量、PATH 注入等约定，见各方法自身的 JSDoc。
+ * `nodeVersion` 与 args 的语义、PATH 注入等约定，见各方法自身的 JSDoc。
  *
  * 进度与过程提示 `console.error` 中文直出（调用方为唯一消费方）；失败一律 throw，由调用方统一呈现。
  */
@@ -47,14 +47,21 @@ function splitTokens(args: string | readonly string[]): string[] {
     .filter((token) => token.length > 0);
 }
 
+/** `Node.ensure` 的可选项。 */
+export interface EnsureOptions {
+  /** 逃生口：跳过下载与落位，直接用这个 node 可执行文件（`rt` 仍为 `<appDir>/node`） */
+  readonly nodeBin?: string | null;
+  /** 下载镜像（目录结构同 `nodejs.org/dist`）；未指定时只走内置默认镜像链 */
+  readonly mirror?: string | null;
+}
+
 /**
  * 某个 Node 运行时的执行封装。
  *
  * 实例由 {@link Node.ensure} 装配（或直接 `new Node(nodePath, rt)` 用于测试）。除 `path`/`rt` 外的
  * 属性与方法语义见各自 JSDoc。
  */
-export class Node {
-  /** node 可执行文件绝对路径 */
+export class Node {  /** node 可执行文件绝对路径 */
   path: string;
   /** 运行时根：决定 `npmCliPath`/`npxCliPath` 的解析位置，也用于前置子进程 PATH */
   rt: string;
@@ -280,32 +287,35 @@ export class Node {
    * 复用、零落位；否则交由 `installNode` 逐条目落位、共享目录按子项合并——**绝不整目录让位或清空**
    * （rt 内躺着 npm 装好的托管包，挪走就等于让服务找不到自身入口，详见文件头注）。
    *
-   * 环境变量 `EZN_NODE_BIN` 为逃生口：指定一个现成的 Node 可执行文件，跳过下载与重装（返回实例的
-   * `rt` 仍为 `<appDir>/node`，即 CLI 解析位置不变）。`EZN_NODE_MIRROR` 指定私有镜像。
+   * 逃生口与镜像走**显式参数**（`options.nodeBin` / `options.mirror`），不读环境变量：配置的
+   * 唯一数据源是调用方（CLI 侧为 `package.json` 的 `ezn` 段），库不该偷偷读进程环境——那会让
+   * 「实际用了哪份 node / 哪个镜像」变得不可见、不可测。
    *
    * @param appDir - 应用根目录（运行时落在其下的 `node/`），相对路径会被 resolve 成绝对路径
    * @param nodeVersion - `"18"` | `"18.1"` | `"18.1.5"`（1~3 段数字），在内置表内按组件级前缀匹配
+   * @param options - 可选项：`nodeBin` 逃生口（跳过下载与重装，`rt` 仍为 `<appDir>/node`，
+   *   即 CLI 解析位置不变）、`mirror` 下载镜像
    * @returns 就绪的 {@link Node} 实例
-   * @throws nodeVersion 格式非法或无匹配；`EZN_NODE_BIN` 指向的 Node 不存在或不可执行；下载/落位失败
+   * @throws nodeVersion 格式非法或无匹配；`nodeBin` 指向的 Node 不存在或不可执行；下载/落位失败
    */
-  static async ensure(appDir: string, nodeVersion: string): Promise<Node> {
+  static async ensure(appDir: string, nodeVersion: string, options: EnsureOptions = {}): Promise<Node> {
     const dir = resolve(appDir); // 相对路径统一转绝对（解压器要求绝对目标目录）
     const fullVersion = matchNodeVersion(nodeVersion);
     const major = Number(fullVersion.replace(/^v/, "").split(".")[0]);
     const rt = join(dir, "node");
     const nodePath = nodeExecPath(rt);
 
-    const override = process.env.EZN_NODE_BIN;
+    const override = options.nodeBin ?? null;
     if (override) {
-      if (!existsSync(override)) throw new Error(`EZN_NODE_BIN 指定的 Node 不存在：${override}`);
+      if (!existsSync(override)) throw new Error(`ezn.nodeBin 指定的 Node 不存在：${override}`);
       const overrideMajor = Node.probeMajor(override);
-      if (overrideMajor === null) throw new Error(`EZN_NODE_BIN 指定的 Node 无法执行：${override}`);
+      if (overrideMajor === null) throw new Error(`ezn.nodeBin 指定的 Node 无法执行：${override}`);
       if (overrideMajor < major) {
         console.error(
-          `[ezn] 警告：EZN_NODE_BIN 的 Node 主版本为 ${overrideMajor}，低于建议值 ${major}，按用户指定继续。`,
+          `[ezn] 警告：ezn.nodeBin 的 Node 主版本为 ${overrideMajor}，低于建议值 ${major}，按用户指定继续。`,
         );
       }
-      console.error(`[ezn] Node 运行时（EZN_NODE_BIN）：${override}`);
+      console.error(`[ezn] Node 运行时（ezn.nodeBin）：${override}`);
       return new Node(override, rt);
     }
 
@@ -328,7 +338,7 @@ export class Node {
       // 不整目录让位/清空——rt 内躺着 npm 装好的托管包，挪走就等于让服务找不到自身入口；
       // 由 installNode 逐条目落位、共享目录按子项合并兜底（见 ./install.ts）。
     }
-    await installNode(rt, nodeVersion);
+    await installNode(rt, nodeVersion, { mirror: options.mirror ?? null });
     return new Node(nodePath, rt);
   }
 }

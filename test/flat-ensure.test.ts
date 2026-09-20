@@ -111,18 +111,12 @@ function currentMajorInTable(): number | null {
 
 describe("Node.ensure 复用分支（不落位）", () => {
   let appDir: string;
-  let savedNodeBin: string | undefined;
 
   beforeEach(() => {
     appDir = mkdtempSync(join(tmpdir(), "ezn-flat-app-"));
-    // 本机可能通过逃生口设置了 EZN_NODE_BIN（会短路掉探测分支），逐例隔离
-    savedNodeBin = process.env.EZN_NODE_BIN;
-    delete process.env.EZN_NODE_BIN;
   });
 
   afterEach(() => {
-    if (savedNodeBin === undefined) delete process.env.EZN_NODE_BIN;
-    else process.env.EZN_NODE_BIN = savedNodeBin;
     rmSync(appDir, { recursive: true, force: true });
   });
 
@@ -156,7 +150,7 @@ describe("Node.ensure 复用分支（不落位）", () => {
     expect(readdirSync(rt).some((n) => n.includes(".old-"))).toBe(false);
   });
 
-  it("EZN_NODE_BIN 逃生口 → path 取显式 Node，rt 仍为 <appDir>/node（决定 CLI 解析位置），零落位", async () => {
+  it("options.nodeBin 逃生口 → path 取显式 Node，rt 仍为 <appDir>/node（决定 CLI 解析位置），零落位", async () => {
     // 预置 POSIX 布局的自带 npm：rt 语义由「解析命中哪里」体现（而非探测进程 node 自己的目录）
     const rt = join(appDir, "node");
     const npmCli = join(rt, "lib", "node_modules", "npm", "bin", "npm-cli.js");
@@ -164,8 +158,7 @@ describe("Node.ensure 复用分支（不落位）", () => {
     writeFileSync(npmCli, "FAKE_NPM");
     const before = listTree(appDir);
 
-    process.env.EZN_NODE_BIN = process.execPath;
-    const node = await Node.ensure(appDir, "18");
+    const node = await Node.ensure(appDir, "18", { nodeBin: process.execPath });
 
     expect(node.path).toBe(process.execPath);
     expect(node.rt).toBe(rt);

@@ -43,7 +43,7 @@ const MERGE_PATHS: readonly (readonly string[])[] = IS_WIN ? [["node_modules"]] 
 /**
  * 下载 + 解压内置表指定版本的 Node，返回「已去掉顶层版本目录」的内容目录（位于 workDir 内）。
  *
- * - 镜像顺序：`EZN_NODE_MIRROR` > registry.npmmirror.com > nodejs.org，逐个重试
+ * - 镜像顺序：`options.mirror`（来自 `ezn.mirror` 配置）> registry.npmmirror.com > nodejs.org，逐个重试
  * - 临时区（压缩包 + 解压区）建在 workDir 下——与最终目标同盘，保证后续 rename 不跨盘 EXDEV
  * - 调用方把 src 搬走/落位后**必须**调用 `cleanup()`
  *
@@ -56,7 +56,7 @@ const MERGE_PATHS: readonly (readonly string[])[] = IS_WIN ? [["node_modules"]] 
 async function downloadExtract(
   nodeVersion: string,
   workDir: string,
-  opts: { target: string; nodePath: string; platform: { dir: string; ext: string } },
+  opts: { target: string; nodePath: string; platform: { dir: string; ext: string }; mirror: string | null },
 ): Promise<{ src: string; cleanup: () => void }> {
   const filename = `node-${nodeVersion}-${opts.platform.dir}.${opts.platform.ext}`;
   const tmpArchive = join(workDir, "node.download.tmp");
@@ -67,8 +67,7 @@ async function downloadExtract(
   };
 
   const mirrors: string[] = [];
-  const customMirror = process.env.EZN_NODE_MIRROR;
-  if (customMirror) mirrors.push(customMirror.replace(/\/+$/, ""));
+  if (opts.mirror) mirrors.push(opts.mirror.replace(/\/+$/, ""));
   mirrors.push("https://registry.npmmirror.com/-/binary/node", "https://nodejs.org/dist");
 
   rmSync(tmpArchive, { force: true });
@@ -129,8 +128,8 @@ async function downloadExtract(
       "Node 运行时下载失败：所有镜像源均不可用。",
       "可尝试的恢复方式：",
       "  1. 检查网络后重试；",
-      "  2. 设置私有镜像（目录结构需同 nodejs.org/dist）后重试，例如：",
-      "       set EZN_NODE_MIRROR=https://your-mirror.example/node-dist",
+      "  2. 在 package.json 里配置私有镜像（目录结构需同 nodejs.org/dist）后重试，例如：",
+      '       "ezn": { "node": "24", "mirror": "https://your-mirror.example/node-dist" }',
       `  3. 手动放置：下载 ${filename}（见 ${officialBase}/${nodeVersion}/），`,
       `     解压到 ${opts.target}（如带顶层版本目录请把其内容上移一层），`,
       `     确保可执行文件位于 ${opts.nodePath}。`,
@@ -173,6 +172,12 @@ function landEntry(
   renameSync(srcPath, destPath); // 同盘 rename（src 在 dir 内），无 EXDEV
 }
 
+/** `installNode` 的可选项。 */
+export interface InstallNodeOptions {
+  /** 下载镜像（目录结构同 `nodejs.org/dist`）；未指定时只走内置默认镜像链 */
+  readonly mirror?: string | null;
+}
+
 /**
  * 把内置表内 nodeVersion 描述的 Node 装进 nodeDir（目录自身即运行时根：Windows `<nodeDir>/node.exe`、
  * POSIX `<nodeDir>/bin/node`），自带 npm/npx/corepack 一并在位。
@@ -184,9 +189,14 @@ function landEntry(
  *
  * @param nodeDir - 目标目录（相对路径会被 resolve 成绝对路径），目录不存在时会创建
  * @param nodeVersion - `"18"` | `"18.1"` | `"18.1.5"`（1~3 段数字），按组件级前缀匹配内置表
+ * @param options - 可选项（镜像）
  * @throws 平台不支持；nodeVersion 格式非法或无匹配；所有镜像源均不可用时抛可操作错误
  */
-export async function installNode(nodeDir: string, nodeVersion: string): Promise<void> {
+export async function installNode(
+  nodeDir: string,
+  nodeVersion: string,
+  options: InstallNodeOptions = {},
+): Promise<void> {
   // 逐条目落位：把解压就绪的 src 内容搬进 dir（MERGE_PATHS 指定的共享目录按子项合并）。
   // 同名运行时条目先备份为 <名>.old-<时间戳>（同一次落位共用同一时间戳）再覆盖——覆盖的是
   // 损坏/不达标的旧运行时；目标独有的子项（npm 装进去的托管包）原地不动。
@@ -215,7 +225,12 @@ export async function installNode(nodeDir: string, nodeVersion: string): Promise
   mkdirSync(dir, { recursive: true }); // 目标目录可能尚不存在（首次装配）
   // 临时区取目标的父目录：与目标同盘，保证落位时的 rename 不跨盘（EXDEV）
   const workDir = dirname(dir);
-  const { src, cleanup } = await downloadExtract(fullVersion, workDir, { target: dir, nodePath, platform });
+  const { src, cleanup } = await downloadExtract(fullVersion, workDir, {
+    target: dir,
+    nodePath,
+    platform,
+    mirror: options.mirror ?? null,
+  });
   try {
     materializeFlat(src, dir);
   } finally {

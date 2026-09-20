@@ -66,7 +66,10 @@ npm install -D @doyzheng/ezn
 {
   "ezn": {
     "node": "22",
-    "dir": "node"
+    "dir": "node",
+    "tools": { "pnpm": "10.34.5" },
+    "mirror": "https://registry.npmmirror.com/-/binary/node",
+    "nodeBin": "/path/to/node"
   }
 }
 ```
@@ -75,10 +78,26 @@ npm install -D @doyzheng/ezn
 |---|---|---|
 | `node` | 是 | 版本描述，`"22"` \| `"22.13"` \| `"22.13.5"` 三种写法（1~3 段数字） |
 | `dir` | 否 | 安装目录名，相对项目根。默认 `node` |
+| `tools` | 否 | 要装进运行时的工具（包名 → 版本），如 `{ "pnpm": "10.34.5" }` |
+| `mirror` | 否 | 下载镜像，目录结构需与 `nodejs.org/dist` 一致 |
+| `nodeBin` | 否 | 逃生口：指定一个现成的 node 可执行文件，跳过下载与落位 |
 
 **配置是向上就近查找的**——和 `.nvmrc` / `.node-version` 一样。在子包里执行就用子包的配置，在仓库根执行就用根的配置，所以 monorepo 里每个子包可以锁定不同版本。
 
 写 `"22"` 而不是 `"22.13.5"` 通常更好：ezn 会在内置版本表里按**组件级前缀**匹配到该主版本最新的一个 patch（`"22"` → `v22.23.2`），等于自动拿到安全更新。写全三段则精确锁定。注意 `"22.1"` **不会**匹配到 `22.13.x`——前缀是逐段比对的。
+
+### 工具（`tools`）
+
+声明在这里的工具会被装进**运行时目录**（`<项目>/node/node_modules/`），而不是宿主的全局目录——版本随项目走，不受机器上装了什么影响。
+
+```json
+"ezn": { "node": "24", "tools": { "pnpm": "10.34.5" } }
+```
+
+- 缺则用运行时自带的 npm 装；版本不符则重装；已就位则零开销（只读一次 `package.json`）
+- 装完 `ezn pnpm ...` 就命中这一份：`resolveCommand` 第 3 步查运行时目录，早于 PATH
+- 版本描述支持 `"10.34.5"` 精确匹配与 `"^10"` / `"~10"` 前缀匹配
+- **失败只警告，不阻塞命令**（断网时 `ezn pnpm ...` 仍会回落到宿主 PATH 的那份）
 
 > ⚠️ **`0.1.0` 起配置键名由 `ezllm-node` 改为 `ezn`**，与包名一致。旧键名**不再被读取**，既有项目需手工改名：把 `package.json` 里的 `"ezllm-node"` 段整体改名为 `"ezn"`。
 
@@ -115,12 +134,10 @@ npm install -D @doyzheng/ezn
 
 ### 环境变量
 
-| 变量 | 作用 |
-|---|---|
-| `EZN_NODE_MIRROR` | 下载镜像。目录结构需与 `nodejs.org/dist` 一致 |
-| `EZN_NODE_BIN` | 逃生口：指定一个现成的 node 可执行文件，跳过下载与落位 |
+本包**不读任何环境变量**——配置的唯一数据源是 `package.json` 的 `ezn` 段（`mirror` / `nodeBin` 等）。
+进程环境会影响行为的话，「实际用了哪个镜像 / 哪份 node」就变得不可见、不可测。
 
-默认下载源按顺序为 `EZN_NODE_MIRROR` → `registry.npmmirror.com` → `nodejs.org`，逐个重试。国内网络下开箱可用。
+下载源按顺序为 `ezn.mirror` → `registry.npmmirror.com` → `nodejs.org`，逐个重试。国内网络下开箱可用。
 
 ## 编程接口
 

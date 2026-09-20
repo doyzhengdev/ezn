@@ -26,9 +26,16 @@ import {
 import { nodeExecPath, nodePlatformKey } from "../src/runtime.js";
 
 // installNode 的打桩入口：落位链路必然触网，此处只验「传参 + 复用/落位决策」，真实落位由冒烟覆盖
-const installNodeMock = vi.fn(async (_dir: string, _version: string) => {});
+const installNodeMock = vi.fn(async (_dir: string, _version: string, _options?: unknown) => {});
 vi.mock("../src/install.js", () => ({
-  installNode: (dir: string, version: string) => installNodeMock(dir, version),
+  installNode: (dir: string, version: string, options?: unknown) => installNodeMock(dir, version, options),
+}));
+
+// 工具装配要真起 npm 子进程（触网）——打桩 spawnInherit，只验「装了哪个包、传了什么参数」
+const spawnInheritMock = vi.fn(async (_cmd: string, _args: readonly string[], _options?: unknown) => 0);
+vi.mock("../src/spawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/spawn.js")>()),
+  spawnInherit: (cmd: string, args: readonly string[], options?: unknown) => spawnInheritMock(cmd, args, options),
 }));
 
 let tmpRoot: string;
@@ -50,14 +57,16 @@ function fakeRuntime(dir: string): string {
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "ezn-n-test-"));
   installNodeMock.mockClear();
+  spawnInheritMock.mockClear();
 });
 
 afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-describe("配置读取（ezn.node / .dir）", () => {
-  const cfg = (node: string, dir?: string) => ({ node, dir: dir ?? null });
+describe("配置读取（ezn.node / .dir / .tools / .mirror / .nodeBin）", () => {
+  // 未配置的可选字段一律为 null / 空对象——调用方据此走默认分支
+  const cfg = (node: string, dir?: string) => ({ node, dir: dir ?? null, tools: {}, mirror: null, nodeBin: null });
 
   it("读取 node；未配 dir → null（表示用默认目录名）", () => {
     writePkg(tmpRoot, { "ezn": { node: "24" } });
@@ -67,6 +76,45 @@ describe("配置读取（ezn.node / .dir）", () => {
   it("读取 dir（自定义安装目录名）", () => {
     writePkg(tmpRoot, { "ezn": { node: "24", dir: "runtime" } });
     expect(readPinnedNode(join(tmpRoot, "package.json"))).toEqual(cfg("24", "runtime"));
+  });
+
+  it("读取 tools / mirror / nodeBin（可选字段）", () => {
+    writePkg(tmpRoot, {
+      "ezn": {
+        node: "24",
+        tools: { pnpm: "10.34.5", typescript: "^5" },
+        mirror: "https://mirror.example/node-dist",
+        nodeBin: "/opt/node/bin/node",
+      },
+    });
+    expect(readPinnedNode(join(tmpRoot, "package.json"))).toEqual({
+      node: "24",
+      dir: null,
+      tools: { pnpm: "10.34.5", typescript: "^5" },
+      mirror: "https://mirror.example/node-dist",
+      nodeBin: "/opt/node/bin/node",
+    });
+  });
+
+  it("tools 里的非法项被滤掉（空名 / 非字符串 / 非法版本描述），合法的保留", () => {
+    writePkg(tmpRoot, {
+      "ezn": { node: "24", tools: { pnpm: "10.34.5", "": "1", bad: "latest", num: 3, ts: "5.9.3" } },
+    });
+    expect(readPinnedNode(join(tmpRoot, "package.json"))?.tools).toEqual({ pnpm: "10.34.5", ts: "5.9.3" });
+  });
+
+  it("tools 非对象（数组 / 字符串 / null）→ 视作空对象，不抛错", () => {
+    for (const bad of [[], "pnpm", null, 3]) {
+      writePkg(tmpRoot, { "ezn": { node: "24", tools: bad } });
+      expect(readPinnedNode(join(tmpRoot, "package.json"))?.tools).toEqual({});
+    }
+  });
+
+  it("mirror / nodeBin 为空串或非字符串 → null（视作未配置）", () => {
+    writePkg(tmpRoot, { "ezn": { node: "24", mirror: "  ", nodeBin: 42 } });
+    const cfg = readPinnedNode(join(tmpRoot, "package.json"));
+    expect(cfg?.mirror).toBeNull();
+    expect(cfg?.nodeBin).toBeNull();
   });
 
   it("未配置 / 文件不存在 / 非法 JSON → null（静默忽略，不改调用方行为）", () => {
@@ -175,7 +223,7 @@ describe("就绪判定与复用", () => {
     expect(installNodeMock).toHaveBeenCalledTimes(1);
     // 传原始描述（不是 resolveRuntimeDir 解析出的 "v22.23.2"）——installNode 内部会再解析一次，
     // 且拒绝 "v" 前缀，两处各解析一次是本包历史上踩过的真实 bug（见项目记忆 §13）
-    expect(installNodeMock).toHaveBeenCalledWith(dir, "22");
+    expect(installNodeMock).toHaveBeenCalledWith(dir, "22", { mirror: null });
   });
 
   it("落位完成后锁目录被清理（异常路径也不残留）", async () => {
@@ -191,27 +239,111 @@ describe("就绪判定与复用", () => {
     expect(existsSync(`${dir}.lock`)).toBe(false);
   });
 
-  it("EZN_NODE_BIN 生效：跳过落位，path 取指定 node，dir 取其所在目录", async () => {
+  it("ezn.nodeBin 生效：跳过落位，path 取指定 node，dir 取其所在目录", async () => {
     const fake = fakeRuntime(join(tmpRoot, "elsewhere"));
-    process.env.EZN_NODE_BIN = fake;
-    try {
-      const out = await ensureRuntime("22", tmpRoot);
-      expect(out.nodePath).toBe(fake);
-      expect(out.dir).toBe(join(tmpRoot, "elsewhere"));
-      expect(installNodeMock).not.toHaveBeenCalled();
-    } finally {
-      delete process.env.EZN_NODE_BIN;
+    writePkg(tmpRoot, { "ezn": { node: "22", nodeBin: fake } });
+    const out = await ensureRuntime("22", tmpRoot);
+    expect(out.nodePath).toBe(fake);
+    expect(out.dir).toBe(join(tmpRoot, "elsewhere"));
+    expect(installNodeMock).not.toHaveBeenCalled();
+  });
+
+  it("ezn.nodeBin 指向不存在的路径 → 抛错（不静默回落下载）", async () => {
+    writePkg(tmpRoot, { "ezn": { node: "22", nodeBin: join(tmpRoot, "no-such-node.exe") } });
+    await expect(ensureRuntime("22", tmpRoot)).rejects.toThrow(/ezn\.nodeBin/);
+    expect(installNodeMock).not.toHaveBeenCalled();
+  });
+
+  it("ezn.mirror 透传给 installNode（配置驱动，不经环境变量）", async () => {
+    writePkg(tmpRoot, { "ezn": { node: "22", mirror: "https://mirror.example/node-dist" } });
+    await ensureRuntime("22", tmpRoot);
+    expect(installNodeMock).toHaveBeenCalledWith(expect.any(String), "22", {
+      mirror: "https://mirror.example/node-dist",
+    });
+  });
+});
+
+describe("工具装配（ezn.tools）", () => {
+  /** 造出「node 已就绪 + 自带 npm 在位」的运行时目录（工具装配的前提）。 */
+  function readyRuntime(): string {
+    writePkg(tmpRoot, { "ezn": { node: "22" } });
+    const { dir } = resolveRuntimeDir("22", tmpRoot);
+    fakeRuntime(dir);
+    for (const rel of [["node_modules"], ["lib", "node_modules"]]) {
+      const npmCli = join(dir, ...rel, "npm", "bin", "npm-cli.js");
+      mkdirSync(dirname(npmCli), { recursive: true });
+      writeFileSync(npmCli, "FAKE_NPM");
+    }
+    return dir;
+  }
+
+  /** 造出工具已装好的落点（版本可控），供「已就绪则跳过」的用例。 */
+  function fakeTool(dir: string, name: string, version: string): void {
+    const pkgDir = join(dir, "node_modules", name);
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ name, version }));
+  }
+
+  it("未配 tools → 不起任何子进程", async () => {
+    readyRuntime();
+    await ensureRuntime("22", tmpRoot);
+    expect(spawnInheritMock).not.toHaveBeenCalled();
+  });
+
+  it("tools 指定的工具缺失 → 用自带 npm 装进运行时目录（--prefix <dir>，不经宿主全局目录）", async () => {
+    const dir = readyRuntime();
+    writePkg(tmpRoot, { "ezn": { node: "22", tools: { pnpm: "10.34.5" } } });
+    await ensureRuntime("22", tmpRoot);
+    expect(spawnInheritMock).toHaveBeenCalledTimes(1);
+    const [cmd, args] = spawnInheritMock.mock.calls[0] as [string, string[]];
+    expect(cmd).toBe(nodeExecPath(dir)); // 用运行时自带的 node 执行
+    expect(args).toContain("install");
+    expect(args).toContain("--prefix");
+    expect(args[args.indexOf("--prefix") + 1]).toBe(dir); // 装进运行时目录，不是宿主全局
+    expect(args).toContain("pnpm@10.34.5");
+  });
+
+  it("工具已按期望版本装好 → 跳过（不重复安装）", async () => {
+    const dir = readyRuntime();
+    fakeTool(dir, "pnpm", "10.34.5");
+    writePkg(tmpRoot, { "ezn": { node: "22", tools: { pnpm: "10.34.5" } } });
+    await ensureRuntime("22", tmpRoot);
+    expect(spawnInheritMock).not.toHaveBeenCalled();
+  });
+
+  it("已装版本与配置不符 → 重装", async () => {
+    const dir = readyRuntime();
+    fakeTool(dir, "pnpm", "9.0.0"); // 旧版本
+    writePkg(tmpRoot, { "ezn": { node: "22", tools: { pnpm: "10.34.5" } } });
+    await ensureRuntime("22", tmpRoot);
+    expect(spawnInheritMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("版本描述按前缀语义匹配（^10 / ~10 / 10 都能命中已装的 10.34.5）", async () => {
+    for (const spec of ["^10.34.5", "~10.34.5"]) {
+      const dir = readyRuntime();
+      fakeTool(dir, "pnpm", "10.34.5");
+      writePkg(tmpRoot, { "ezn": { node: "22", tools: { pnpm: spec } } });
+      await ensureRuntime("22", tmpRoot);
+      expect(spawnInheritMock, `spec=${spec}`).not.toHaveBeenCalled();
+      spawnInheritMock.mockClear();
     }
   });
 
-  it("EZN_NODE_BIN 指向不存在的路径 → 抛错（不静默回落下载）", async () => {
-    process.env.EZN_NODE_BIN = join(tmpRoot, "no-such-node.exe");
-    try {
-      await expect(ensureRuntime("22", tmpRoot)).rejects.toThrow(/EZN_NODE_BIN/);
-      expect(installNodeMock).not.toHaveBeenCalled();
-    } finally {
-      delete process.env.EZN_NODE_BIN;
-    }
+  it("装完仍未就位（npm 静默失败）→ 不误报成功，也不抛错打断命令", async () => {
+    readyRuntime();
+    writePkg(tmpRoot, { "ezn": { node: "22", tools: { pnpm: "10.34.5" } } });
+    // spawnInherit 打桩不真装 → 装完探测仍为 false，走「未就位」分支
+    await expect(ensureRuntime("22", tmpRoot)).resolves.toBeDefined();
+    expect(spawnInheritMock).toHaveBeenCalledTimes(1); // 不重试
+  });
+
+  it("装配失败（子进程抛错）→ 只警告不抛出（断网不该让命令跑不起来）", async () => {
+    readyRuntime();
+    writePkg(tmpRoot, { "ezn": { node: "22", tools: { pnpm: "10.34.5", typescript: "5" } } });
+    spawnInheritMock.mockRejectedValueOnce(new Error("网络不可达"));
+    await expect(ensureRuntime("22", tmpRoot)).resolves.toBeDefined();
+    expect(spawnInheritMock).toHaveBeenCalledTimes(1); // 首个失败即停，不再试下一个
   });
 });
 

@@ -208,47 +208,21 @@ describe("Node.ensure 守卫（不触发下载）", () => {
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  // 以 process.env 存取 EZN_NODE_BIN（逃生口现仅经环境变量注入），逐例保存/恢复
-  function withNodeBin(value: string | undefined, fn: () => unknown): Promise<unknown> | unknown {
-    const prev = process.env.EZN_NODE_BIN;
-    if (value === undefined) delete process.env.EZN_NODE_BIN;
-    else process.env.EZN_NODE_BIN = value;
-    const done = (result: unknown) => {
-      if (prev === undefined) delete process.env.EZN_NODE_BIN;
-      else process.env.EZN_NODE_BIN = prev;
-      return result;
-    };
-    try {
-      const out = fn();
-      return out instanceof Promise
-        ? out.then(done, (err) => {
-            done(err);
-            throw err;
-          })
-        : out;
-    } catch (err) {
-      done(err);
-      throw err;
-    }
-  }
-
   it("非法 nodeVersion → 抛可操作错误（不触发任何下载）", async () => {
     await expect(Node.ensure(tmpRoot, "v24")).rejects.toThrow(/nodeVersion/);
     await expect(Node.ensure(tmpRoot, "27")).rejects.toThrow(/无匹配/);
   });
 
   it("appDir 相对路径 → 内部转绝对（rt 为绝对路径且指向 <appDir>/node）", async () => {
-    await withNodeBin(process.execPath, async () => {
-      const node = await Node.ensure("test-app-rel", "18");
-      expect(isAbsolute(node.rt)).toBe(true);
-      expect(node.rt.endsWith(join("test-app-rel", "node"))).toBe(true);
-    });
+    const node = await Node.ensure("test-app-rel", "18", { nodeBin: process.execPath });
+    expect(isAbsolute(node.rt)).toBe(true);
+    expect(node.rt.endsWith(join("test-app-rel", "node"))).toBe(true);
   });
 
-  it("EZN_NODE_BIN 指向不存在路径 → 抛错", async () => {
-    await withNodeBin(join(tmpRoot, "no-such-node"), async () => {
-      await expect(Node.ensure(tmpRoot, "18")).rejects.toThrow(/EZN_NODE_BIN/);
-    });
+  it("options.nodeBin 指向不存在路径 → 抛错", async () => {
+    await expect(Node.ensure(tmpRoot, "18", { nodeBin: join(tmpRoot, "no-such-node") })).rejects.toThrow(
+      /ezn\.nodeBin/,
+    );
   });
 
   // 回归：ensure 一度把 matchNodeVersion 解析后的 "v20.20.2" 透传给 installNode，
@@ -262,7 +236,7 @@ describe("Node.ensure 守卫（不触发下载）", () => {
     mkdirSync(join(tmpRoot, "node"), { recursive: true });
     writeFileSync(join(tmpRoot, "node", "node.exe"), "BROKEN");
     await Node.ensure(tmpRoot, "18");
-    expect(mocked).toHaveBeenCalledWith(join(tmpRoot, "node"), "18");
+    expect(mocked).toHaveBeenCalledWith(join(tmpRoot, "node"), "18", { mirror: null });
   });
 
   it("内置表：主版本 18~26 全覆盖，version 与键一致", () => {
