@@ -25,7 +25,7 @@
  * 本模块由 `bin/ezn.js` 动态加载（dist/ezn.js）；导出 `main(argv)` 供薄启动器与单测调用。
  */
 
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { installNode } from "./install.js";
 import { matchNodeVersion, nodeExecPath, nodePlatformKey, resolveBundledCli } from "./runtime.js";
@@ -77,11 +77,13 @@ export function projectRoot(startDir: string = process.cwd()): string {
 export function resolveRuntimeDir(
   spec: string,
   startDir: string = process.cwd(),
-): { version: string; platformKey: string; dir: string } {
+  resolved?: { config: PinnedNode; root: string } | null,
+): { version: string; platformKey: string; dir: string; config: PinnedNode | null } {
   const version = matchNodeVersion(spec);
   const platformKey = nodePlatformKey();
   const start = resolve(startDir);
-  const configured = resolveConfiguredNode(start);
+  // 允许调用方传入已解析的配置，避免同一进程内重复读盘——`readPinnedNode` 的告警会因此重复打印
+  const configured = resolved === undefined ? resolveConfiguredNode(start) : resolved;
   const root = configured?.root ?? start;
 
   // 目录名合法性：只允许项目内的相对路径
@@ -93,7 +95,7 @@ export function resolveRuntimeDir(
     );
   }
 
-  return { version, platformKey, dir: join(root, name ?? RUNTIME_DIR_NAME) };
+  return { version, platformKey, dir: join(root, name ?? RUNTIME_DIR_NAME), config: configured?.config ?? null };
 }
 
 /**
@@ -162,23 +164,35 @@ export async function acquireLock(
  *
  * @param spec - 版本描述（"22" | "22.13" | "22.13.0"）
  * @param startDir - 起始目录（缺省 cwd；显式传入供单测隔离，避免落到真实仓库目录）
+ * @param resolved - 已解析的配置（`parseInvocation` 传下来的那份）；缺省时自行解析
  * @returns 精确版本、运行时目录（PATH 前缀来源）、node 可执行文件绝对路径
  * @throws 版本非法/无匹配；`ezn.nodeBin` 指向的 node 不存在；平台不支持；下载失败；落位失败
  */
 export async function ensureRuntime(
   spec: string,
   startDir: string = process.cwd(),
+  resolved?: { config: PinnedNode; root: string } | null,
 ): Promise<{ version: string; dir: string; nodePath: string }> {
-  const { version, dir } = resolveRuntimeDir(spec, startDir);
-  const config = resolveConfiguredNode(resolve(startDir))?.config;
+  // 一次解析、全程复用：`readPinnedNode` 会为非法配置打告警，重复调用就会重复刷屏（实测三次）
+  const configured = resolved ?? resolveConfiguredNode(resolve(startDir));
+  const { version, dir, config } = resolveRuntimeDir(spec, startDir, configured);
   const mirror = config?.mirror ?? null;
+  // 无配置时（直接调本函数、起点之上无 ezn 段）仍走三级回退的兜底档：装上 pnpm
+  const effective: PinnedNode = config ?? {
+    node: spec,
+    dir: null,
+    tools: {},
+    mirror: null,
+    nodeBin: null,
+    packageManager: null,
+  };
 
   const override = config?.nodeBin ?? null;
   if (override) {
     const nodePath = resolve(override);
     if (!existsSync(nodePath)) throw new Error(`ezn.nodeBin 指定的 Node 不存在：${nodePath}`);
     console.error(`[ezn] 使用 ezn.nodeBin 指定的 Node：${nodePath}`);
-    await ensureTools(dir, config?.tools ?? {});
+    await ensureTools(dir, effective);
     return { version, dir: dirname(nodePath), nodePath };
   }
 
@@ -198,12 +212,14 @@ export async function ensureRuntime(
     }
   }
 
-  await ensureTools(dir, config?.tools ?? {});
+  await ensureTools(dir, effective);
   return { version, dir, nodePath };
 }
 
 /**
- * 补齐 `ezn.tools` 声明的工具（缺则用运行时自带 npm 装，版本不符则重装）。
+ * 补齐要装进运行时的工具（缺则用运行时自带 npm 装，版本不符则重装）。
+ *
+ * 装什么由 {@link resolveTools} 三级回退决定（tools 显式 → packageManager → pnpm 最新）。
  *
  * 为什么锁与 node 落位分开：本函数的判据是「工具是否已装」，而 `acquireLock` 的判据是
  * `isReady(dir)`（node 是否在位）——node 已就绪时复用同一把锁会**立刻提前返回**，
@@ -213,10 +229,11 @@ export async function ensureRuntime(
  * 会去查全局 prefix，宿主存在另一份 npm 时会被劫持），且装进运行时目录而非宿主全局目录。
  *
  * @param dir - 运行时目录（npm 的 `--prefix`，也是 ezn 命令解析的首候选）
- * @param tools - 包名 → 版本描述（来自 `ezn.tools`）
+ * @param config - 已解析的 ezn 配置（含 tools 与 packageManager）
  * @returns 无（失败只警告，不抛出）
  */
-async function ensureTools(dir: string, tools: Readonly<Record<string, string>>): Promise<void> {
+async function ensureTools(dir: string, config: PinnedNode): Promise<void> {
+  const tools = resolveTools(config);
   const entries = Object.entries(tools);
   if (entries.length === 0) return;
 
@@ -229,22 +246,30 @@ async function ensureTools(dir: string, tools: Readonly<Record<string, string>>)
     // double-check：等锁期间别的进程可能已装好
     for (const [name, spec] of missing) {
       if (toolReady(dir, name, spec)) continue;
-      const args = ["install", "-g", "--prefix", dir, `${name}@${spec}`, "--ignore-scripts"];
-      console.error(`[ezn] 正在安装工具 ${name}@${spec}（装到：${dir}）...`);
+      // "*" 的安装目标就是 latest，不带版本号才能让 npm 取最新（`pkg@*` 语义等价，但显式更清楚）
+      const target = spec === "*" ? name : `${name}@${spec}`;
+      console.error(`[ezn] 正在安装工具 ${spec === "*" ? `${name}（最新版）` : target}（装到：${dir}）...`);
       try {
         const npmCli = resolveBundledCli(dir, "npm");
-        await spawnInherit(nodeExecPath(dir), [npmCli, ...args], { env: { ...process.env, PATH: childPath(dir) } });
+        await spawnInherit(nodeExecPath(dir), [npmCli, "install", "-g", "--prefix", dir, target, "--ignore-scripts"], {
+          env: { ...process.env, PATH: childPath(dir) },
+        });
       } catch (err) {
         console.error(
-          `[ezn] 工具 ${name}@${spec} 安装失败（不影响本次命令）：${err instanceof Error ? err.message : String(err)}`,
+          `[ezn] 工具 ${target} 安装失败（不影响本次命令）：${err instanceof Error ? err.message : String(err)}`,
         );
         return; // 一个装不上就停：继续试别的只会重复报同类错误
       }
-      if (!toolReady(dir, name, spec)) {
-        console.error(`[ezn] 工具 ${name}@${spec} 安装后未就位（${toolPackageDir(dir, name)}），跳过`);
+      // "*" 就位与否只能看包目录（没有版本可比），再补写标记供下次探测
+      if (spec === "*" ? !existsSync(toolPackageDir(dir, name)) : !toolReady(dir, name, spec)) {
+        console.error(`[ezn] 工具 ${target} 安装后未就位（${toolPackageDir(dir, name)}），跳过`);
         return;
       }
-      console.error(`[ezn] 工具 ${name}@${spec} 已就绪`);
+      if (spec === "*") {
+        mkdirSync(dirname(toolMarkerPath(dir, name)), { recursive: true });
+        writeFileSync(toolMarkerPath(dir, name), `${name}@*\n`);
+      }
+      console.error(`[ezn] 工具 ${target} 已就绪`);
     }
   } finally {
     if (gotLock) rmSync(lockDir, { recursive: true, force: true });
@@ -260,6 +285,11 @@ function toolPackageDir(dir: string, name: string): string {
   return candidates.find((candidate) => existsSync(candidate)) ?? (candidates[0] as string);
 }
 
+/** 工具标记文件所在的目录（运行时目录下），记录「该工具已按 * 装过一次」。 */
+function toolMarkerPath(dir: string, name: string): string {
+  return join(dir, ".ezn-tools", name);
+}
+
 /**
  * 工具是否已按期望版本装好。
  *
@@ -267,11 +297,16 @@ function toolPackageDir(dir: string, name: string): string {
  * （pnpm 12 起会因 `package.json` 的 `packageManager` 字段自我切换、报出的是另一份），
  * 用 `-v` 核对会得到假阳性。对照 `hostedPackageReady` 的同款取舍。
  *
+ * `"*"`（不关心版本）无法做版本比对——若只判「已装」就永远命中、再也不会更新。
+ * 故用标记文件记录「`*` 已装过一次」，标记在则跳过、不在则装（并写标记）。
+ * 想强制重装 latest 就删掉 `<运行时目录>/.ezn-tools/<包名>`。
+ *
  * @param dir - 运行时目录
  * @param name - 包名
- * @param spec - 版本描述（`"10.34.5"` 精确匹配；`"^10"` / `"~10"` 按前缀放行）
+ * @param spec - 版本描述（`"10.34.5"` 精确匹配；`"^10"` / `"~10"` 按前缀放行；`"*"` 只看标记）
  * @returns 已装且版本相符时为 true */
 function toolReady(dir: string, name: string, spec: string): boolean {
+  if (spec === "*") return existsSync(toolMarkerPath(dir, name));
   try {
     const pkgPath = join(toolPackageDir(dir, name), "package.json");
     if (!existsSync(pkgPath)) return false;
@@ -358,6 +393,48 @@ function isExecutable(file: string): boolean {
 }
 
 /**
+ * `npm` 全局操作的标志（命中即认定「装到全局」）。
+ *
+ * 覆盖 npm 的几种等价写法：`-g` / `--global` / `--global=true` / `-g=true`。
+ * `--location=global` 也是全局写法，但它在 npm 里语义更宽（可影响 `npm config`），
+ * 且不会被 `--prefix` 冲突——故不在此列，由用户显式 `--prefix` 的判定兜住。
+ */
+const NPM_GLOBAL_FLAGS = ["-g", "--global"] as const;
+
+/** 判断 npm 参数里是否要做全局操作（`-g` / `--global`，含 `=值` 形态）。 */
+function isNpmGlobal(args: readonly string[]): boolean {
+  return args.some((arg) => NPM_GLOBAL_FLAGS.some((flag) => arg === flag || arg.startsWith(`${flag}=`)));
+}
+
+/** 判断用户是否自己写了 `--prefix`（写了就尊重，不重复注入）。
+ *  覆盖 `--prefix X` 与 `--prefix=X` 两种形态。 */
+function hasExplicitPrefix(args: readonly string[]): boolean {
+  return args.some((arg) => arg === "--prefix" || arg.startsWith("--prefix="));
+}
+
+/**
+ * 给 `ezn npm` 的参数补上 `--prefix <运行时目录>`（仅当是全局操作且用户没自己写 `--prefix` 时）。
+ *
+ * 为什么必须显式注入，而不是靠「谁在执行 npm」推导落点：npm 的 globalPrefix 默认由 node 位置推导
+ * （托管 node → 托管目录，实测成立），但**用户 `~/.npmrc` 里一个 `prefix=` 就能把它劫持**——
+ * 实测 `--userconfig` 指到写了 `prefix=C:\evil-prefix` 的文件时，`npm root -g` 就变成了那里。
+ * 此时 `ezn npm i -g x` 会「成功」但装错地方，而 `ezn x` 找不到它（假阳性），正是本包要根除的那类 bug。
+ *
+ * **只对全局操作注入**：`--prefix` 对非全局命令的含义是「改项目根目录」，不是「改安装位置」——
+ * 实测往托管目录跑 `npm install --prefix <rt> <包>` 会把 rt 当成项目根，写入 package.json /
+ * package-lock.json，并把 rt 里**不在该依赖树中的既有包铲掉**（实测 `removed 1 package`）。
+ * 托管目录里躺着服务自己的托管包，那样等于让服务找不到自身入口。
+ *
+ * @param dir - 运行时目录（`--prefix` 的落位根）
+ * @param args - 用户给 npm 的参数（不含 npm-cli.js 前缀）
+ * @returns 注入后的参数；无需注入时原样返回
+ */
+export function withGlobalPrefix(dir: string, args: readonly string[]): string[] {
+  if (!isNpmGlobal(args) || hasExplicitPrefix(args)) return [...args];
+  return ["--prefix", dir, ...args];
+}
+
+/**
  * 解析要执行的命令。
  *
  * 顺序（命中即返回）：
@@ -417,10 +494,51 @@ export interface PinnedNode {
   mirror: string | null;
   /** 逃生口：跳过下载与落位，直接用这个 node 可执行文件；未配置时为 null */
   nodeBin: string | null;
+  /** `packageManager` 字段原文（如 `"pnpm@10.34.5"`）；未配置时为 null */
+  packageManager: string | null;
 }
 
-/** 版本描述合法性：`"18"` | `"18.1"` | `"18.1.5"`（1~3 段数字，允许 `^` / `~` 前缀）。 */
-const VERSION_DESC_RE = /^[~^]?\d+(\.\d+){0,2}$/;
+/** 解析 `packageManager` 字段（`<包名>@<版本>`，可带 corepack 的 `+<hash>` 后缀）。
+ *
+ *  用 `lastIndexOf("@")` 而非正则拆分：scoped 包名（`@yarnpkg/cli@4.0.0`）里也有 `@`，
+ *  按第一个 `@` 切会把包名切断。
+ *
+ *  @param raw - 字段原文
+ *  @returns 包名与版本；形态不合法时为 null（调用方按「没配」处理） */
+export function parsePackageManager(raw: string | null): { name: string; version: string } | null {
+  if (raw === null) return null;
+  const at = raw.lastIndexOf("@");
+  if (at <= 0) return null; // 无 @ 或 @ 在开头（只有 scope 没有版本）
+  const name = raw.slice(0, at).trim();
+  const version = raw.slice(at + 1).split("+")[0]?.trim() ?? ""; // 剥掉 corepack 的 +sha512…
+  if (name === "" || !VERSION_DESC_RE.test(version)) return null;
+  return { name, version };
+}
+
+/**
+ * 合成最终要装进运行时的工具清单。
+ *
+ * 版本来源三级回退（越靠前越优先）：
+ *   1. `ezn.tools.<包名>` 显式声明的版本（`"*"` = 不关心版本）
+ *   2. `packageManager` 字段声明的包管理器与其版本（与 corepack 同一语义）
+ *   3. 兜底：装 pnpm 的最新版——ezn 的脚本生态（`ezn pnpm …`）默认以 pnpm 为包管理器
+ *
+ * 为什么要有第 2 级：`packageManager` 已是「本项目用哪个包管理器、哪个版本」的既有事实源，
+ * 让 tools 再抄一份版本就是第二处声明（漂移风险）。故 tools 只需在**想偏离**时书写。
+ *
+ * @param config - 已解析的 ezn 配置
+ * @returns 包名 → 版本描述（`"*"` 表示不关心版本，装最新一次） */
+export function resolveTools(config: PinnedNode): Record<string, string> {
+  const tools: Record<string, string> = { ...config.tools };
+  const pm = parsePackageManager(config.packageManager);
+  if (pm !== null && !(pm.name in tools)) tools[pm.name] = pm.version;
+  if (!("pnpm" in tools)) tools["pnpm"] = "*";
+  return tools;
+}
+
+/** 版本描述合法性：`"18"` | `"18.1"` | `"18.1.5"`（1~3 段数字，允许 `^` / `~` 前缀）；
+ *  工具另接受 `"*"`（不关心版本，装最新的一次）。 */
+const VERSION_DESC_RE = /^(\*|[~^]?\d+(\.\d+){0,2})$/;
 
 /**
  * 读取 `package.json` 里的 ezn 配置。
@@ -447,7 +565,7 @@ const VERSION_DESC_RE = /^[~^]?\d+(\.\d+){0,2}$/;
  */
 export function readPinnedNode(pkgPath: string): PinnedNode | null {
   try {
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { "ezn"?: Record<string, unknown> };
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { "ezn"?: Record<string, unknown>; packageManager?: unknown };
     const section = pkg["ezn"];
     const node = section?.["node"];
     if (typeof node === "string" && node.trim() !== "") {
@@ -457,6 +575,8 @@ export function readPinnedNode(pkgPath: string): PinnedNode | null {
         tools: readTools(section?.["tools"]),
         mirror: readNonEmptyString(section, "mirror"),
         nodeBin: readNonEmptyString(section, "nodeBin"),
+        // packageManager 在顶层（不在 ezn 段内）——它是 npm 官方字段，本包只读不改语义
+        packageManager: typeof pkg.packageManager === "string" ? pkg.packageManager.trim() || null : null,
       };
     }
   } catch {
@@ -475,17 +595,32 @@ function readNonEmptyString(section: Record<string, unknown> | undefined, key: s
 }
 
 /** 取 `tools` 段（包名 → 版本描述），滤掉空名与非法版本描述。
+ *
+ *  任何被丢弃的项都**必须报警**：静默丢弃是最难排查的一类配置错误（写错了却毫无反馈，
+ *  表现为「明明配了却没装」）。非字符串形态（null / true / 数字）与非法版本描述一视同仁。
+ *
  *  @param raw - `ezn.tools` 的原始值
  *  @returns 合法的工具表；未配置/形态非法时为空对象（调用方按「没配」处理） */
 function readTools(raw: unknown): Record<string, string> {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    if (raw !== undefined) {
+      console.error(`[ezn] 忽略 ezn.tools：应为对象（包名 → 版本），收到 ${JSON.stringify(raw)}`);
+    }
+    return {};
+  }
   const tools: Record<string, string> = {};
   for (const [name, desc] of Object.entries(raw as Record<string, unknown>)) {
-    if (name.trim() === "") continue;
-    if (typeof desc !== "string") continue;
-    const version = desc.trim();
-    if (!VERSION_DESC_RE.test(version)) {
-      console.error(`[ezn] 忽略非法的工具版本描述：ezn.tools["${name}"] = ${JSON.stringify(desc)}（应为 "1" | "1.2" | "1.2.3" 形式）`);
+    if (name.trim() === "") {
+      console.error("[ezn] 忽略 ezn.tools 里的空包名");
+      continue;
+    }
+    // 版本可以是字符串；数字形态（如 "pnpm": 10）是常见笔误，一并报出来而不是静默丢弃
+    const version = typeof desc === "string" ? desc.trim() : typeof desc === "number" ? String(desc) : null;
+    if (version === null || !VERSION_DESC_RE.test(version)) {
+      console.error(
+        `[ezn] 忽略非法的工具版本描述：ezn.tools["${name}"] = ${JSON.stringify(desc)}\n` +
+          '     应为 "1" | "1.2" | "1.2.3"（可加 ^ / ~ 前缀），或 "*" 表示不关心版本。',
+      );
       continue;
     }
     tools[name] = version;
@@ -525,7 +660,7 @@ const USAGE = [
   "示例：",
   "  ezn vitest run               在项目固定的 Node 上跑 vitest",
   "  ezn node -v                  跑运行时自带的 node",
-  "  ezn npm i -g some-cli        用运行时自带的 npm",
+  "  ezn npm i -g some-cli        用运行时自带的 npm（-g 恒装进运行时目录，不受宿主 npmrc 影响）",
   "  ezn                          只打印本次会用的运行时信息，不执行命令",
   "  ezn --version                打印 ezn 自身版本",
   "",
@@ -534,7 +669,8 @@ const USAGE = [
   "  node    版本，只在此处声明一次——一个项目一个版本，命令行不接版本参数。",
   "  dir     安装目录名（相对项目根，可省略，默认 node）；须在 .gitignore 忽略。",
   "  tools   要装进运行时的工具（包名 → 版本，可省略）：缺则用运行时自带 npm 装，装进运行时目录。",
-  "          版本写法同 node（1~3 段数字，可加 ^ / ~）。",
+  '          版本可写 "10" / "10.34.5"（可加 ^ / ~），或 "*" 表示不关心版本、装最新一次。',
+  "          版本三级回退：tools 显式 → packageManager 字段 → pnpm 最新版。",
   "  mirror  下载镜像（目录结构同 nodejs.org/dist，可省略）；用于内网/加速。",
   "  nodeBin 逃生口：跳过下载与落位，直接用指定的 node 可执行文件（可省略）。",
   "  不复用 engines.node：那是兼容范围语义（本包壳包基线写着 >=16），混用会解析错版本。",
@@ -550,18 +686,18 @@ const USAGE = [
  *
  * @param args - 已剔除 `--` / `--help` / `--version` 的参数
  * @param startDir - 起始目录（缺省 cwd；显式传入供单测隔离，避免落到真实仓库目录）
- * @returns 版本描述与命令参数
+ * @returns 版本描述、命令参数与已解析的配置（供 `ensureRuntime` 复用，免重复读盘）
  * @throws 未配置 `ezn.node` 时的可操作错误
  */
 export function parseInvocation(
   args: readonly string[],
   startDir: string = process.cwd(),
-): { spec: string; rest: string[] } {
+): { spec: string; rest: string[]; resolved: { config: PinnedNode; root: string } } {
   // `--` 是习惯性的「选项结束」分隔符，剥掉一层后原样传下去
   const tokens = args[0] === "--" ? args.slice(1) : [...args];
   const configured = resolveConfiguredNode(startDir);
   if (configured === null) throw new Error(missingConfigMessage(startDir));
-  return { spec: configured.config.node, rest: tokens };
+  return { spec: configured.config.node, rest: tokens, resolved: configured };
 }
 
 /**
@@ -603,8 +739,8 @@ export async function main(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
-  const { spec, rest } = parseInvocation(args);
-  const { version, dir, nodePath } = await ensureRuntime(spec);
+  const { spec, rest, resolved } = parseInvocation(args);
+  const { version, dir, nodePath } = await ensureRuntime(spec, process.cwd(), resolved);
   if (rest.length === 0) {
     // 诊断模式：命令可省略，只报告本次会用的运行时
     console.error(`[ezn] Node 版本：${version}（配置 ezn.node = ${spec}）`);
@@ -616,8 +752,11 @@ export async function main(argv: readonly string[]): Promise<number> {
   const [name, ...cmdRest] = rest as [string, ...string[]];
   // `node` 恒解析到本运行时的 node 本体（而非 PATH 上的宿主 node）——这是「固定版本」的核心承诺
   const { file, prefixArgs } = name === "node" ? { file: nodePath, prefixArgs: [] } : resolveCommand(dir, name);
+  // `ezn npm …` 的全局操作锁死落点：不锁定的话，宿主 ~/.npmrc 的一个 prefix= 就能把 -g 打回宿主目录
+  // （装是成功了但装错地方，且 ezn 找不到它）。只动全局操作，理由见 withGlobalPrefix 的注释。
+  const userArgs = name === "npm" ? withGlobalPrefix(dir, cmdRest) : cmdRest;
   const shell = IS_WIN && /\.(cmd|bat)$/i.test(file);
-  const [cmd, cmdArgs] = shellSafe(file, [...prefixArgs, ...cmdRest], shell);
+  const [cmd, cmdArgs] = shellSafe(file, [...prefixArgs, ...userArgs], shell);
   try {
     return await spawnInherit(cmd, cmdArgs, { shell, env: { ...process.env, PATH: childPath(dir) } });
   } catch (err) {

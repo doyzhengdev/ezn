@@ -16,12 +16,15 @@ import {
   isReady,
   missingConfigMessage,
   parseInvocation,
+  parsePackageManager,
   projectRoot,
   readPinnedNode,
   resolveConfiguredNode,
   resolveCommand,
   resolveInAncestors,
   resolveRuntimeDir,
+  resolveTools,
+  withGlobalPrefix,
 } from "../src/ezn-cli.js";
 import { nodeExecPath, nodePlatformKey } from "../src/runtime.js";
 
@@ -66,7 +69,14 @@ afterEach(() => {
 
 describe("配置读取（ezn.node / .dir / .tools / .mirror / .nodeBin）", () => {
   // 未配置的可选字段一律为 null / 空对象——调用方据此走默认分支
-  const cfg = (node: string, dir?: string) => ({ node, dir: dir ?? null, tools: {}, mirror: null, nodeBin: null });
+  const cfg = (node: string, dir?: string) => ({
+    node,
+    dir: dir ?? null,
+    tools: {},
+    mirror: null,
+    nodeBin: null,
+    packageManager: null,
+  });
 
   it("读取 node；未配 dir → null（表示用默认目录名）", () => {
     writePkg(tmpRoot, { "ezn": { node: "24" } });
@@ -78,7 +88,7 @@ describe("配置读取（ezn.node / .dir / .tools / .mirror / .nodeBin）", () =
     expect(readPinnedNode(join(tmpRoot, "package.json"))).toEqual(cfg("24", "runtime"));
   });
 
-  it("读取 tools / mirror / nodeBin（可选字段）", () => {
+  it("读取 tools / mirror / nodeBin / packageManager（可选字段）", () => {
     writePkg(tmpRoot, {
       "ezn": {
         node: "24",
@@ -86,6 +96,7 @@ describe("配置读取（ezn.node / .dir / .tools / .mirror / .nodeBin）", () =
         mirror: "https://mirror.example/node-dist",
         nodeBin: "/opt/node/bin/node",
       },
+      packageManager: "pnpm@9.15.0",
     });
     expect(readPinnedNode(join(tmpRoot, "package.json"))).toEqual({
       node: "24",
@@ -93,20 +104,56 @@ describe("配置读取（ezn.node / .dir / .tools / .mirror / .nodeBin）", () =
       tools: { pnpm: "10.34.5", typescript: "^5" },
       mirror: "https://mirror.example/node-dist",
       nodeBin: "/opt/node/bin/node",
+      packageManager: "pnpm@9.15.0", // 顶层字段，不在 ezn 段内
     });
   });
 
   it("tools 里的非法项被滤掉（空名 / 非字符串 / 非法版本描述），合法的保留", () => {
     writePkg(tmpRoot, {
-      "ezn": { node: "24", tools: { pnpm: "10.34.5", "": "1", bad: "latest", num: 3, ts: "5.9.3" } },
+      "ezn": { node: "24", tools: { pnpm: "10.34.5", "": "1", bad: "latest", str: "5.9.3" } },
     });
-    expect(readPinnedNode(join(tmpRoot, "package.json"))?.tools).toEqual({ pnpm: "10.34.5", ts: "5.9.3" });
+    expect(readPinnedNode(join(tmpRoot, "package.json"))?.tools).toEqual({ pnpm: "10.34.5", str: "5.9.3" });
   });
 
-  it("tools 非对象（数组 / 字符串 / null）→ 视作空对象，不抛错", () => {
-    for (const bad of [[], "pnpm", null, 3]) {
-      writePkg(tmpRoot, { "ezn": { node: "24", tools: bad } });
-      expect(readPinnedNode(join(tmpRoot, "package.json"))?.tools).toEqual({});
+  it("被丢弃的 tools 项一律报警（静默丢弃是最难排查的配置错误）", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // 非字符串（null / true）与非法版本描述（latest / *）都要有提示
+      writePkg(tmpRoot, { "ezn": { node: "24", tools: { a: null, b: true, c: "latest", d: "*x" } } });
+      readPinnedNode(join(tmpRoot, "package.json"));
+      const logged = spy.mock.calls.map((c) => String(c[0])).join("\n");
+      for (const name of ["a", "b", "c", "d"]) expect(logged).toContain(`ezn.tools["${name}"]`);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("数字形态的版本号（常见笔误）被接受并转为字符串，同时报警说明", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      writePkg(tmpRoot, { "ezn": { node: "24", tools: { pnpm: 10 } } });
+      // 数字 10 是合法版本描述的形态 → 收下（而非丢弃），但会经报警分支提示
+      expect(readPinnedNode(join(tmpRoot, "package.json"))?.tools).toEqual({ pnpm: "10" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('tools 值可以是 "*"（不关心版本，装最新一次）', () => {
+    writePkg(tmpRoot, { "ezn": { node: "24", tools: { pnpm: "*" } } });
+    expect(readPinnedNode(join(tmpRoot, "package.json"))?.tools).toEqual({ pnpm: "*" });
+  });
+
+  it("tools 整体非对象（数组 / 字符串）→ 空对象并报警", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      for (const bad of [[], "pnpm", 3]) {
+        writePkg(tmpRoot, { "ezn": { node: "24", tools: bad } });
+        expect(readPinnedNode(join(tmpRoot, "package.json"))?.tools).toEqual({});
+      }
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(3);
+    } finally {
+      spy.mockRestore();
     }
   });
 
@@ -284,10 +331,65 @@ describe("工具装配（ezn.tools）", () => {
     writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ name, version }));
   }
 
-  it("未配 tools → 不起任何子进程", async () => {
-    readyRuntime();
+  it("未配 tools 且未配 packageManager → 兜底装上 pnpm 最新版（ezn 脚本生态默认包管理器）", async () => {
+    const dir = readyRuntime();
+    spawnInheritMock.mockImplementationOnce(async () => {
+      fakeTool(dir, "pnpm", "12.5.1");
+      return 0;
+    });
     await ensureRuntime("22", tmpRoot);
-    expect(spawnInheritMock).not.toHaveBeenCalled();
+    expect(spawnInheritMock).toHaveBeenCalledTimes(1);
+    const [, args] = spawnInheritMock.mock.calls[0] as [string, string[]];
+    expect(args).toContain("pnpm"); // 裸包名 = 最新版
+  });
+
+  it("packageManager 声明了包管理器 → 版本取自它（无需在 tools 里抄一份）", async () => {
+    const dir = readyRuntime();
+    fakeTool(dir, "pnpm", "9.15.0");
+    writePkg(tmpRoot, { name: "x", "ezn": { node: "22" }, packageManager: "pnpm@9.15.0" });
+    await ensureRuntime("22", tmpRoot);
+    expect(spawnInheritMock).not.toHaveBeenCalled(); // 版本已相符，跳过
+    void dir;
+  });
+
+  it("packageManager 版本不符 → 按它重装（tools 没写也不落到 latest）", async () => {
+    const dir = readyRuntime();
+    fakeTool(dir, "pnpm", "12.5.1"); // 旧的非期望版本
+    writePkg(tmpRoot, { name: "x", "ezn": { node: "22" }, packageManager: "pnpm@9.15.0" });
+    spawnInheritMock.mockImplementationOnce(async () => {
+      fakeTool(dir, "pnpm", "9.15.0");
+      return 0;
+    });
+    await ensureRuntime("22", tmpRoot);
+    const [, args] = spawnInheritMock.mock.calls[0] as [string, string[]];
+    expect(args).toContain("pnpm@9.15.0");
+  });
+
+  it("tools 显式版本优先于 packageManager（可偏离）", () => {
+    const base = {
+      node: "24",
+      dir: null,
+      mirror: null,
+      nodeBin: null,
+      packageManager: "pnpm@9.15.0",
+    };
+    expect(resolveTools({ ...base, tools: { pnpm: "10.34.5" } })).toEqual({ pnpm: "10.34.5" });
+    expect(resolveTools({ ...base, tools: { pnpm: "*" } })).toEqual({ pnpm: "*" });
+    // 未写 tools → 用 packageManager 的版本
+    expect(resolveTools({ ...base, tools: {} })).toEqual({ pnpm: "9.15.0" });
+    // 既没 tools 也没 packageManager → 兜底 pnpm 最新
+    expect(resolveTools({ ...base, tools: {}, packageManager: null })).toEqual({ pnpm: "*" });
+  });
+
+  it("scoped 包名的 packageManager 解析正确（@yarnpkg/cli@4.0.0 不被切断）", () => {
+    expect(parsePackageManager("@yarnpkg/cli@4.0.0")).toEqual({ name: "@yarnpkg/cli", version: "4.0.0" });
+    expect(parsePackageManager("pnpm@10.34.5")).toEqual({ name: "pnpm", version: "10.34.5" });
+    // corepack 的 +sha512 后缀要剥掉
+    expect(parsePackageManager("pnpm@10.34.5+sha512.abc123")).toEqual({ name: "pnpm", version: "10.34.5" });
+    // 非法形态 → null
+    for (const bad of [null, "pnpm", "@4.0.0", "pnpm@latest", ""]) {
+      expect(parsePackageManager(bad)).toBeNull();
+    }
   });
 
   it("tools 指定的工具缺失 → 用自带 npm 装进运行时目录（--prefix <dir>，不经宿主全局目录）", async () => {
@@ -345,6 +447,36 @@ describe("工具装配（ezn.tools）", () => {
     await expect(ensureRuntime("22", tmpRoot)).resolves.toBeDefined();
     expect(spawnInheritMock).toHaveBeenCalledTimes(1); // 首个失败即停，不再试下一个
   });
+
+  it('"*" → 装 latest（不带版本号），装完写标记；再跑一次靠标记跳过', async () => {
+    const dir = readyRuntime();
+    writePkg(tmpRoot, { "ezn": { node: "22", tools: { pnpm: "*" } } });
+    // 打桩不真装，故让「安装」把包目录造出来——就位判定与标记写入才走得到
+    spawnInheritMock.mockImplementationOnce(async () => {
+      fakeTool(dir, "pnpm", "12.5.1");
+      return 0;
+    });
+
+    await ensureRuntime("22", tmpRoot);
+    const [, args] = spawnInheritMock.mock.calls[0] as [string, string[]];
+    expect(args).toContain("pnpm"); // 裸包名 = latest，不带 @*
+    expect(args.some((a) => a.startsWith("pnpm@"))).toBe(false);
+    expect(existsSync(join(dir, ".ezn-tools", "pnpm"))).toBe(true); // 标记已写
+
+    // 第二次：标记在 → 跳过（否则 "*" 会永远命中、再也更新不了）
+    spawnInheritMock.mockClear();
+    await ensureRuntime("22", tmpRoot);
+    expect(spawnInheritMock).not.toHaveBeenCalled();
+  });
+
+  it('"*" 的标记缺失但包已在 → 仍会重装一次并补标记（标记是唯一判据）', async () => {
+    const dir = readyRuntime();
+    fakeTool(dir, "pnpm", "12.5.1");
+    writePkg(tmpRoot, { "ezn": { node: "22", tools: { pnpm: "*" } } });
+    await ensureRuntime("22", tmpRoot);
+    expect(spawnInheritMock).toHaveBeenCalledTimes(1);
+    expect(existsSync(join(dir, ".ezn-tools", "pnpm"))).toBe(true);
+  });
 });
 
 describe("并发落位锁", () => {
@@ -377,6 +509,43 @@ describe("并发落位锁", () => {
     const dir = join(tmpRoot, "fresh", "node");
     expect(await acquireLock(`${dir}.lock`, dir)).toBe(true);
     expect(existsSync(`${dir}.lock`)).toBe(true);
+  });
+});
+
+describe("npm 全局操作锁定落点（withGlobalPrefix）", () => {
+  const RT = join("some", "runtime");
+
+  it("全局操作 → 前置 --prefix <运行时目录>（-g / --global 两种写法）", () => {
+    for (const flag of ["-g", "--global", "--global=true", "-g=true"]) {
+      expect(withGlobalPrefix(RT, ["i", flag, "some-cli"])).toEqual(["--prefix", RT, "i", flag, "some-cli"]);
+    }
+  });
+
+  it("非全局操作 → 原样返回（--prefix 对非全局命令是「改项目根」，注入会破坏项目语义）", () => {
+    expect(withGlobalPrefix(RT, ["i", "some-cli"])).toEqual(["i", "some-cli"]);
+    expect(withGlobalPrefix(RT, ["run", "build"])).toEqual(["run", "build"]);
+    expect(withGlobalPrefix(RT, ["ci"])).toEqual(["ci"]);
+    expect(withGlobalPrefix(RT, ["exec", "some-bin"])).toEqual(["exec", "some-bin"]);
+  });
+
+  it("用户自己写了 --prefix → 尊重，不重复注入（叠加会让落点取决于参数顺序）", () => {
+    expect(withGlobalPrefix(RT, ["i", "-g", "--prefix", "C:/mine", "some-cli"])).toEqual([
+      "i",
+      "-g",
+      "--prefix",
+      "C:/mine",
+      "some-cli",
+    ]);
+    expect(withGlobalPrefix(RT, ["i", "-g", "--prefix=C:/mine", "some-cli"])).toEqual([
+      "i",
+      "-g",
+      "--prefix=C:/mine",
+      "some-cli",
+    ]);
+  });
+
+  it("不含 -g 的 --global 前缀词不算全局（如 --global-style 这类近形参数）", () => {
+    expect(withGlobalPrefix(RT, ["i", "--globally", "x"])).toEqual(["i", "--globally", "x"]);
   });
 });
 
@@ -425,20 +594,32 @@ describe("命令解析", () => {
 describe("参数解析（版本只来自配置，命令行不接版本）", () => {
   beforeEach(() => writePkg(tmpRoot, { "ezn": { node: "24" } }));
 
+  // 只断言 spec/rest；resolved 是「顺带带出的配置」供 ensureRuntime 复用，不是本块的对象
+  const specRest = (args: string[]) => {
+    const { spec, rest } = parseInvocation(args, tmpRoot);
+    return { spec, rest };
+  };
+
   it("版本取自配置，命令与参数原样透传", () => {
-    expect(parseInvocation(["vitest", "run"], tmpRoot)).toEqual({ spec: "24", rest: ["vitest", "run"] });
-    expect(parseInvocation(["node", "-v"], tmpRoot)).toEqual({ spec: "24", rest: ["node", "-v"] });
-    expect(parseInvocation([], tmpRoot)).toEqual({ spec: "24", rest: [] }); // 诊断模式
+    expect(specRest(["vitest", "run"])).toEqual({ spec: "24", rest: ["vitest", "run"] });
+    expect(specRest(["node", "-v"])).toEqual({ spec: "24", rest: ["node", "-v"] });
+    expect(specRest([])).toEqual({ spec: "24", rest: [] }); // 诊断模式
   });
 
   it("命令行里的数字是命令名，不会被当成版本吞掉", () => {
-    expect(parseInvocation(["22"], tmpRoot)).toEqual({ spec: "24", rest: ["22"] });
+    expect(specRest(["22"])).toEqual({ spec: "24", rest: ["22"] });
   });
 
   it("习惯性的 -- 分隔符剥掉一层后原样传下去", () => {
-    expect(parseInvocation(["--", "vitest", "run"], tmpRoot)).toEqual({ spec: "24", rest: ["vitest", "run"] });
+    expect(specRest(["--", "vitest", "run"])).toEqual({ spec: "24", rest: ["vitest", "run"] });
     // 只剥一层：命令名恰好是 "--" 时仍能传给它
-    expect(parseInvocation(["--", "--", "x"], tmpRoot)).toEqual({ spec: "24", rest: ["--", "x"] });
+    expect(specRest(["--", "--", "x"])).toEqual({ spec: "24", rest: ["--", "x"] });
+  });
+
+  it("顺带带出已解析的配置（供 ensureRuntime 复用，避免重复读盘与重复告警）", () => {
+    const { resolved } = parseInvocation(["vitest"], tmpRoot);
+    expect(resolved?.config.node).toBe("24");
+    expect(resolved?.root).toBe(tmpRoot);
   });
 
   // 注：「找不到配置 → 抛错」这条不断言 parseInvocation 真的抛——那要求起点之上到盘根都没有
