@@ -39,9 +39,21 @@ function fail(message: string): never {
 }
 
 /** 跑一条命令并把输出原样交给用户（stdout 直连，便于看构建/发布进度）。 */
+/** 该命令是否需要经 shell 执行。
+ *
+ *  **只有 Windows 下的 npm/pnpm/npx 需要**：它们是 `.cmd` 包装器，不`shell` 则 spawn 报 ENOENT
+ *  （Node 自 CVE-2024-27980 起禁止直接 spawn .cmd/.bat）。其余命令（git / node）都是 .exe，
+ *  而**经 shell 是有代价的**——shell 会按空白把参数重新分词、不做转义，带空格的参数会被拆散。
+ *  实测踩过：`git commit -m "chore(release): 发布 0.0.4"` 经 shell 后被拆成三段，git 把「发布」
+ *  和「0.0.4」当成 pathspec 而报 `did not match any file(s) known to git`（发版流程因此中断）。 */
+function needsShell(cmd: string): boolean {
+  return process.platform === "win32" && /^(npm|pnpm|npx)$/.test(cmd);
+}
+
+/** 跑一条命令并把输出原样交给用户（stdout 直连，便于看构建/发布进度）。 */
 function run(cmd: string, args: readonly string[], opts: { cwd?: string } = {}): void {
   console.error(`[release] $ ${cmd} ${args.join(" ")}`);
-  execFileSync(cmd, args, { cwd: opts.cwd ?? pkgRoot, stdio: "inherit", shell: process.platform === "win32" });
+  execFileSync(cmd, args, { cwd: opts.cwd ?? pkgRoot, stdio: "inherit", shell: needsShell(cmd) });
 }
 
 /** 跑一条命令并捕获 stdout（用于读取型命令，如 npm view / git status）。 */
@@ -49,7 +61,7 @@ function capture(cmd: string, args: readonly string[], opts: { cwd?: string } = 
   return execFileSync(cmd, args, {
     cwd: opts.cwd ?? pkgRoot,
     encoding: "utf-8",
-    shell: process.platform === "win32",
+    shell: needsShell(cmd),
   }).trim();
 }
 
@@ -158,7 +170,7 @@ try {
   execFileSync("npm", ["publish"], {
     cwd: pkgRoot,
     stdio: "inherit",
-    shell: process.platform === "win32",
+    shell: needsShell("npm"),
     env: withAuthEnv(token),
   });
   console.error(`[release] ✓ 已发布 ${pkg.name}@${next}`);
