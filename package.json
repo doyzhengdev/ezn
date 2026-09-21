@@ -60,7 +60,7 @@
     "typecheck": "tsc",
     "update-assets": "node scripts/update-node-assets.mjs",
     "test": "tsdown && npx vitest run",
-    "release": "node scripts/release.mts"
+    "release": "tsx scripts/release.mts"
   },
   "dependencies": {
     "extract-zip": "^2.0.1",
@@ -72,6 +72,8 @@
     "@types/tar": "^6.1.13",
     "tsdown": "^0.23.0",
     "typescript": "^5.9.3",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "prettier": "^3.9.8",
+    "tsx": "^4.23.15"
   }
 }

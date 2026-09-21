@@ -18,13 +18,11 @@
  * **发布失败时回滚版本号**：把 package.json 恢复原值、并恢复任何已改的工作区文件，
  * 以免留下「版本号已 bump 但没发出去」的中间态——那种状态下次发版会拿到错误的递增基数。
  *
- * token 从 `.env` 读（该文件已 gitignore，见 .gitignore 的注释）。**绝不把 token 写进产物或
- * 提交**：临时 .npmrc 建在系统临时目录、用完即删。
+ * token 从 `.env` 读（该文件已 gitignore，见 .gitignore 的注释）。**绝不把 token 写进产物或提交**：
+ * 经 `npm_config_//<host>/:_authToken` 环境变量传给 npm 子进程，不落盘。
  */
-
-import { execFileSync, execSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -75,12 +73,16 @@ function readToken(): string {
   return token;
 }
 
-/** 校验工作区干净——发版必须基于已提交的状态，否则 commit 会把无关改动一起带上。 */
+/** 校验工作区干净——发版必须基于**已提交**的状态。
+ *
+ *  为什么暂存（git add）不算过关：本脚本随后要 `git commit package.json`，若暂存区里还躺着别的
+ *  改动，它们会被一并提交进发版提交里（`git commit <path>` 只限定路径，不限定暂存来源）。
+ *  故此处要求 `git status --porcelain` 完全为空——含未暂存、已暂存与未跟踪三类。 */
 function assertCleanWorktree(): void {
   const status = capture("git", ["status", "--porcelain"]);
   if (status !== "") {
     fail(
-      "工作区不干净，请先提交或暂存后再发版：\n" +
+      "工作区不干净（含未跟踪文件），请先提交后再发版：\n" +
         status
           .split("\n")
           .map((l) => `    ${l}`)
@@ -94,7 +96,7 @@ function latestPublished(pkgName: string): string | null {
   try {
     // 用 --registry 显式指定：本机默认源可能是镜像（如 npmmirror），查到的版本未必与发布目标一致
     const out = capture("npm", ["view", pkgName, "version", "--registry", REGISTRY]);
-    return out === "" ? null : out.split("\n").pop()?.trim() ?? null;
+    return out === "" ? null : (out.split("\n").pop()?.trim() ?? null);
   } catch {
     // 包未发布过（E404）或网络异常——交给调用方按「首次发布」处理并提示
     return null;

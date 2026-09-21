@@ -456,9 +456,10 @@ export function withGlobalPrefix(dir: string, args: readonly string[]): string[]
 export function resolveCommand(dir: string, name: string): { file: string; prefixArgs: string[] } {
   if (name === "npm" || name === "npx") {
     // 自带 CLI 入口缺失时（精简发行版）回落到 PATH 解析——不因缺 npm 而整体不可用
-    const cli = [join(dir, "node_modules", "npm", "bin", `${name}-cli.js`), join(dir, "lib", "node_modules", "npm", "bin", `${name}-cli.js`)].find(
-      (candidate) => existsSync(candidate),
-    );
+    const cli = [
+      join(dir, "node_modules", "npm", "bin", `${name}-cli.js`),
+      join(dir, "lib", "node_modules", "npm", "bin", `${name}-cli.js`),
+    ].find((candidate) => existsSync(candidate));
     if (cli) return { file: nodeExecPath(dir), prefixArgs: [cli] };
   }
   if (name.includes("/") || name.includes("\\")) return { file: name, prefixArgs: [] };
@@ -511,7 +512,11 @@ export function parsePackageManager(raw: string | null): { name: string; version
   const at = raw.lastIndexOf("@");
   if (at <= 0) return null; // 无 @ 或 @ 在开头（只有 scope 没有版本）
   const name = raw.slice(0, at).trim();
-  const version = raw.slice(at + 1).split("+")[0]?.trim() ?? ""; // 剥掉 corepack 的 +sha512…
+  const version =
+    raw
+      .slice(at + 1)
+      .split("+")[0]
+      ?.trim() ?? ""; // 剥掉 corepack 的 +sha512…
   if (name === "" || !VERSION_DESC_RE.test(version)) return null;
   return { name, version };
 }
@@ -566,7 +571,10 @@ const VERSION_DESC_RE = /^(\*|[~^]?\d+(\.\d+){0,2})$/;
  */
 export function readPinnedNode(pkgPath: string): PinnedNode | null {
   try {
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { "ezn"?: Record<string, unknown>; packageManager?: unknown };
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as {
+      ezn?: Record<string, unknown>;
+      packageManager?: unknown;
+    };
     const section = pkg["ezn"];
     const node = section?.["node"];
     if (typeof node === "string" && node.trim() !== "") {

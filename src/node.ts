@@ -61,7 +61,8 @@ export interface EnsureOptions {
  * 实例由 {@link Node.ensure} 装配（或直接 `new Node(nodePath, rt)` 用于测试）。除 `path`/`rt` 外的
  * 属性与方法语义见各自 JSDoc。
  */
-export class Node {  /** node 可执行文件绝对路径 */
+export class Node {
+  /** node 可执行文件绝对路径 */
   path: string;
   /** 运行时根：决定 `npmCliPath`/`npxCliPath` 的解析位置，也用于前置子进程 PATH */
   rt: string;

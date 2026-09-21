@@ -54,7 +54,11 @@ export function shellSafe(file: string, argv: readonly string[], shell: boolean)
  * @param options - spawn 选项（`windowsHide` 默认开启）
  * @returns 收集完输出后的结果；stdio 非 pipe 时 `stdout`/`stderr` 为 null
  */
-export function spawnAsync(cmd: string, args: readonly string[], options: SpawnOptions = {}): Promise<SpawnAsyncResult> {
+export function spawnAsync(
+  cmd: string,
+  args: readonly string[],
+  options: SpawnOptions = {},
+): Promise<SpawnAsyncResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { windowsHide: true, ...options });
     let stdout: string | null = null;
