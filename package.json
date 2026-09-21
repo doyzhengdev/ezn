@@ -55,8 +55,6 @@
   },
   "scripts": {
     "build": "tsdown",
-    "prepack": "tsdown",
-    "prepublishOnly": "npm test",
     "typecheck": "tsc",
     "update-assets": "node scripts/update-node-assets.mjs",
     "test": "tsdown && npx vitest run",
