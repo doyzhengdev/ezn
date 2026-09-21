@@ -54,12 +54,12 @@
     "access": "public"
   },
   "scripts": {
-    "build": "node scripts/build.mjs",
-    "prepack": "node scripts/build.mjs",
+    "build": "tsdown",
+    "prepack": "tsdown",
     "prepublishOnly": "npm test",
     "typecheck": "tsc",
     "update-assets": "node scripts/update-node-assets.mjs",
-    "test": "node scripts/build.mjs && npx vitest run"
+    "test": "tsdown && npx vitest run"
   },
   "dependencies": {
     "extract-zip": "^2.0.1",
@@ -69,7 +69,7 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/tar": "^6.1.13",
-    "esbuild": "^0.25.12",
+    "tsdown": "^0.23.0",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"
   }

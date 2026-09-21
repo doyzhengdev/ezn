@@ -6,7 +6,7 @@
  * - `./install.ts`——下载 + 解压 + 落位（`installNode(nodeDir, nodeVersion)`）
  * - `./runtime.ts`——运行时探测与版本解析（版本表匹配、自带 npm/npx 入口解析、就绪判定）
  *
- * `dist/` 构建产物（CJS/ESM 双入口）以本文件为 esbuild 入口；ESM 包装名单见 `scripts/build.mjs`。
+ * `dist/` 构建产物（CJS/ESM 双入口）以本文件为入口；产物形态与命名见根目录 `tsdown.config.mts`。
  */
 
 export { Node } from "./node.js";

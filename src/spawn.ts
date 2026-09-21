@@ -3,7 +3,7 @@
  * @fileoverview
  * 为什么单独成模块：Windows 的 shell 模式引用规则（见 {@link quoteShellArg}）与 `.cmd` 必须经 shell
  * 这条安全策略（见 {@link shellSafe}）是**两处消费者共用**的同一套语义——`Node` 类的 exec/npm/npx
- * 封装与 `ezn` 命令（`./ezn-cli.ts`）都要用。各写一份必然漂移，故集中在此。
+ * 封装与 `ezn` 命令（`./cli.ts`）都要用。各写一份必然漂移，故集中在此。
  *
  * 本模块不从包导出（公共 API 面只有 `Node`）。
  */

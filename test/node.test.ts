@@ -1,7 +1,7 @@
 // ezn 单测（离线）：主版本探测、版本描述匹配、ensure 守卫、内置版本表形态、执行封装基本语义。
 // 涉及真实下载/解压的链路由壳包引导器 e2e（临时 EZN_APP_DIR 三分支实测）覆盖，此处不做网络 I/O。
 
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { createRequire } from "node:module";
@@ -79,12 +79,27 @@ function sourceExportNames(source: string): string[] {
 }
 
 describe("构建产物双形态冒烟（CJS/ESM）", () => {
-  it("ESM 入口（dist/index.mjs）：具名导入可用（经 createRequire 包装 CJS 实现）", async () => {
+  it("ESM 入口（dist/index.mjs）：具名导入可用（真 ESM，非 createRequire 包装）", async () => {
     const { pathToFileURL } = await import("node:url");
     const mod = await import(pathToFileURL(join(process.cwd(), "dist", "index.mjs")).href);
     expect(typeof mod.Node).toBe("function");
     const node = new mod.Node(process.execPath, tmpdir());
     expect(node.major).toBe(Number(process.versions.node.split(".")[0]));
+  });
+
+  it("CLI 产物就位且可加载出 main（bin/ezn.js 的加载路径契约）", async () => {
+    // 为什么必须有这条：bin/ezn.js 硬编码加载某个产物文件名，而该名字由 tsdown.config.mts 的
+    // **entry 键**决定。两者错位时构建照常成功、其余测试全绿，CLI 却报「未找到构建产物」
+    // （实测踩过：键改为 cli 而未同步启动器）。故此处**从 bin/ezn.js 源码反读它实际加载的路径**，
+    // 再断言该文件存在且能加载出 main——这样无论两边叫什么名字，只要不一致就会失败。
+    const binSrc = readFileSync(join(process.cwd(), "bin", "ezn.js"), "utf8");
+    const match = /join\(__dirname,\s*"\.\.",\s*"dist",\s*"([^"]+)"\)/.exec(binSrc);
+    expect(match, "未能从 bin/ezn.js 解析出产物路径（其写法变了？）").not.toBeNull();
+    const cliPath = join(process.cwd(), "dist", (match as RegExpExecArray)[1] as string);
+    expect(existsSync(cliPath), `bin/ezn.js 加载的产物不存在：${cliPath}`).toBe(true);
+    const { pathToFileURL } = await import("node:url");
+    const mod = (await import(pathToFileURL(cliPath).href)) as { main?: unknown };
+    expect(typeof mod.main).toBe("function");
   });
 
   it("ESM 入口的具名导出与 src 的运行期导出对齐（硬编码 re-export 名单不漏项）", async () => {

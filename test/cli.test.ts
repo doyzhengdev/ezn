@@ -25,7 +25,7 @@ import {
   resolveRuntimeDir,
   resolveTools,
   withGlobalPrefix,
-} from "../src/ezn-cli.js";
+} from "../src/cli.js";
 import { nodeExecPath, nodePlatformKey } from "../src/runtime.js";
 
 // installNode 的打桩入口：落位链路必然触网，此处只验「传参 + 复用/落位决策」，真实落位由冒烟覆盖
@@ -206,7 +206,7 @@ describe("运行时目录推导", () => {
     expect(version).toMatch(/^v22\.\d+\.\d+$/);
     expect(platformKey).toBe(nodePlatformKey());
     expect(dir).toBe(join(tmpRoot, "node"));
-    // 版本不进路径：换版本仍落同一个目录（覆盖式落位，见 src/ezn-cli.ts 文件头注）
+    // 版本不进路径：换版本仍落同一个目录（覆盖式落位，见 src/cli.ts 文件头注）
     expect(resolveRuntimeDir("24", tmpRoot).dir).toBe(dir);
   });
 
@@ -573,7 +573,7 @@ describe("命令解析", () => {
   // 回归：`n pnpm -r test` 一度报「找不到命令：pnpm」——pnpm 是宿主装的，不在任何
   // node_modules/.bin 里，而 Windows 上 Node 的 spawn 只认 .exe、不认 .cmd，裸名交给子进程
   // 必然 ENOENT。故解析链必须补一步 PATH 查找（按 PATHEXT 补全后缀）。
-  // 见 src/ezn-cli.ts 的 resolveInPath。
+  // 见 src/cli.ts 的 resolveInPath。
   it("宿主 PATH 上的命令可解析（Windows 需补全 .cmd/.bat/.exe 后缀）", () => {
     const hit = resolveCommand(join(tmpRoot, "no-such-runtime"), process.platform === "win32" ? "npm" : "sh");
     expect(hit.file).not.toBe("");

@@ -226,8 +226,8 @@ CJS / ESM 双形态，`engines: >=16`。
 
 ```bash
 npm install
-npm run build          # esbuild + tsc → dist/
-npm test               # 构建 + 跑全部测试（73 个）
+npm run build          # tsdown（rolldown）→ dist/
+npm test               # 构建 + 跑全部测试（99 个）
 npm run typecheck
 npm run update-assets  # 拉 nodejs.org 刷新 src/versions.json（需联网）
 ```

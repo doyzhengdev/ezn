@@ -22,7 +22,8 @@
  * 也便于直接查看/清理（删掉 `node/` 即可）。代价是每个项目各一份，且**必须**在 .gitignore
  * 里忽略它（本包 README 已写明），否则约 100MB 的运行时会被 git 追踪。
  *
- * 本模块由 `bin/ezn.js` 动态加载（dist/ezn.js）；导出 `main(argv)` 供薄启动器与单测调用。
+ * 本模块由 `bin/ezn.js` 动态加载（构建产物 `dist/ezn.js`，产物名由 tsdown.config.mts 的
+ * entry 键决定）；导出 `main(argv)` 供薄启动器与单测调用。
  */
 
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -33,7 +34,7 @@ import { shellSafe, spawnInherit } from "./spawn.js";
 
 const IS_WIN = process.platform === "win32";
 
-/** 构建期注入的本包版本号（见 scripts/build.mjs 的 define）。 */
+/** 构建期注入的本包版本号（见 tsdown.config.mts 的 define）。 */
 declare const __EZN_VERSION__: string;
 
 /** 冷缓存下并发抢锁的等待上限：超过即视为持锁进程已死，夺锁重试（毫秒）。 */
