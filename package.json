@@ -1,6 +1,6 @@
 {
   "name": "@doyzheng/ezn",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "在项目固定版本的托管 Node 上执行任意命令：按需下载/落位 Node 运行时，零系统依赖（npx nve 22 的替代）",
   "license": "MIT",
   "type": "commonjs",
