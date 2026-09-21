@@ -1,0 +1,186 @@
+/** @file 一键发版：查最新版本 → patch +1 → 构建 → 发布 npm → 提交并推 tag。
+ * @fileoverview
+ *
+ * 用法：`npm run release`（或 `node scripts/release.mts`）。
+ *
+ * 为什么用 `.mts` 后缀：本包是 `type: "commonjs"`，`.ts` 会被 Node 按 CJS 加载，
+ * 而本脚本用 ESM 语法（顶层 await）。Node ≥ 22.6 原生支持类型剥离，无需额外运行器。
+ *
+ * 流程（任一步失败即中止，且不留半成品状态）：
+ *   1. 前置校验：工作区干净、在 git 仓库、.env 有 NPM_TOKEN
+ *   2. 向 registry 查最新已发布版本（而不是读本地 package.json——本地可能落后于线上）
+ *   3. patch +1
+ *   4. npm publish —— 校验与构建由 package.json 的既有钩子承担：`prepublishOnly` 跑 `npm test`
+ *      （tsdown + vitest），`prepack` 再跑一次 tsdown 产出最终产物。**本脚本不重复跑这两步**，
+ *      否则 tsdown 会连跑三次、vitest 两次。测试失败会让 publish 失败，脚本随即回滚版本号。
+ *   5. git add + commit + tag + push（含 tag）
+ *
+ * **发布失败时回滚版本号**：把 package.json 恢复原值、并恢复任何已改的工作区文件，
+ * 以免留下「版本号已 bump 但没发出去」的中间态——那种状态下次发版会拿到错误的递增基数。
+ *
+ * token 从 `.env` 读（该文件已 gitignore，见 .gitignore 的注释）。**绝不把 token 写进产物或
+ * 提交**：临时 .npmrc 建在系统临时目录、用完即删。
+ */
+
+import { execFileSync, execSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const pkgRoot: string = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const pkgPath: string = join(pkgRoot, "package.json");
+
+/** npm 官方源：发布目标恒为它（与 package.json 的 publishConfig.registry 一致）。 */
+const REGISTRY = "https://registry.npmjs.org/";
+
+/** 一步失败就中止：发版流程的任何一步出错，继续往下只会造成更坏的中间态。 */
+function fail(message: string): never {
+  console.error(`\n[release] ✗ ${message}`);
+  process.exit(1);
+}
+
+/** 跑一条命令并把输出原样交给用户（stdout 直连，便于看构建/发布进度）。 */
+function run(cmd: string, args: readonly string[], opts: { cwd?: string } = {}): void {
+  console.error(`[release] $ ${cmd} ${args.join(" ")}`);
+  execFileSync(cmd, args, { cwd: opts.cwd ?? pkgRoot, stdio: "inherit", shell: process.platform === "win32" });
+}
+
+/** 跑一条命令并捕获 stdout（用于读取型命令，如 npm view / git status）。 */
+function capture(cmd: string, args: readonly string[], opts: { cwd?: string } = {}): string {
+  return execFileSync(cmd, args, {
+    cwd: opts.cwd ?? pkgRoot,
+    encoding: "utf-8",
+    shell: process.platform === "win32",
+  }).trim();
+}
+
+interface Pkg {
+  name: string;
+  version: string;
+  [key: string]: unknown;
+}
+
+/** 读 .env 里的 NPM_TOKEN（只取这一个键；不引入 dotenv 依赖）。 */
+function readToken(): string {
+  const envPath = join(pkgRoot, ".env");
+  if (!existsSync(envPath)) fail(`未找到 .env（应含 NPM_TOKEN）：${envPath}`);
+  const line = readFileSync(envPath, "utf-8")
+    .split(/\r?\n/)
+    .find((l) => l.trim().startsWith("NPM_TOKEN"));
+  const token = line?.slice(line.indexOf("=") + 1).trim();
+  if (!token) {
+    fail("`.env` 里没有 NPM_TOKEN。请添加一行：NPM_TOKEN=npm_xxxxxxxx");
+  }
+  return token;
+}
+
+/** 校验工作区干净——发版必须基于已提交的状态，否则 commit 会把无关改动一起带上。 */
+function assertCleanWorktree(): void {
+  const status = capture("git", ["status", "--porcelain"]);
+  if (status !== "") {
+    fail(
+      "工作区不干净，请先提交或暂存后再发版：\n" +
+        status
+          .split("\n")
+          .map((l) => `    ${l}`)
+          .join("\n"),
+    );
+  }
+}
+
+/** 查 registry 上的最新已发布版本。发布过则返回它，未发布过（首次）返回 null。 */
+function latestPublished(pkgName: string): string | null {
+  try {
+    // 用 --registry 显式指定：本机默认源可能是镜像（如 npmmirror），查到的版本未必与发布目标一致
+    const out = capture("npm", ["view", pkgName, "version", "--registry", REGISTRY]);
+    return out === "" ? null : out.split("\n").pop()?.trim() ?? null;
+  } catch {
+    // 包未发布过（E404）或网络异常——交给调用方按「首次发布」处理并提示
+    return null;
+  }
+}
+
+/** patch 位 +1（0.0.3 → 0.0.4）。 */
+function bumpPatch(version: string): string {
+  const parts = version.split(".").map((p) => Number.parseInt(p, 10));
+  if (parts.length !== 3 || parts.some((n) => !Number.isInteger(n) || n < 0)) {
+    fail(`版本号形态无法解析（期望 x.y.z）：${version}`);
+  }
+  return `${parts[0]}.${parts[1]}.${(parts[2] as number) + 1}`;
+}
+
+/** 在当前进程环境里临时挂上 npm 认证：经 `npm_config_//host/:_authToken` 环境变量传递。
+ *
+ *  为什么不用临时 .npmrc：环境变量无需落盘、也不会因异常退出而残留含 token 的文件。
+ *  npm 认的是 `//<host>/:_authToken` 这个规范化键名，故用 `npm_config_` 前缀 + 完整路径注入。 */
+function withAuthEnv(token: string): NodeJS.ProcessEnv {
+  const host = REGISTRY.replace(/^https?:/, "").replace(/\/$/, ""); // //registry.npmjs.org
+  return { ...process.env, [`npm_config_${host}/:_authToken`]: token };
+}
+
+// ── 主流程 ───────────────────────────────────────────────────────────────
+
+const token = readToken();
+const pkg = JSON.parse(readFileSync(pkgPath, "utf-8")) as Pkg;
+
+assertCleanWorktree();
+
+console.error(`[release] 包：${pkg.name}`);
+const latest = latestPublished(pkg.name);
+if (latest === null) {
+  fail(`未能从 ${REGISTRY} 查到 ${pkg.name} 的最新版本（网络问题或包未发布过？）`);
+}
+console.error(`[release] registry 最新版本：${latest}`);
+
+// 以 registry 的版本为基数递增，而不是本地 package.json——本地可能是尚未发布的改动
+const next = bumpPatch(latest);
+console.error(`[release] 本次发布版本：${next}`);
+
+const originalPkg = readFileSync(pkgPath, "utf-8");
+
+/** 回滚：恢复 package.json 原内容（发布失败时不留「版本号已 bump 但没发出去」的中间态）。 */
+function rollback(): void {
+  writeFileSync(pkgPath, originalPkg, "utf-8");
+  console.error(`[release] 已回滚 package.json 到 ${pkg.version}`);
+}
+
+try {
+  writeFileSync(pkgPath, `${JSON.stringify({ ...pkg, version: next }, null, 2)}\n`, "utf-8");
+  console.error(`[release] 已写入版本号 ${next}`);
+
+  // 不在此处跑构建/测试：npm publish 会自动触发 package.json 的
+  // `prepublishOnly`（npm test = tsdown + vitest）与 `prepack`（tsdown）。
+  // 任一步失败都会让 publish 失败，下面的 catch 随即回滚版本号。
+  console.error("[release] 发布到 npm（将自动跑 prepublishOnly 的测试与 prepack 的构建）...");
+  execFileSync("npm", ["publish"], {
+    cwd: pkgRoot,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+    env: withAuthEnv(token),
+  });
+  console.error(`[release] ✓ 已发布 ${pkg.name}@${next}`);
+} catch (err) {
+  rollback();
+  fail(`发布失败：${err instanceof Error ? err.message : String(err)}`);
+}
+
+// 发布成功后才提交：顺序反过来的话，提交了却没发出去会留下误导性的提交记录
+try {
+  run("git", ["add", "package.json", "package-lock.json"]);
+  run("git", ["commit", "-m", `chore(release): 发布 ${next}`]);
+  run("git", ["tag", `v${next}`]);
+  run("git", ["push", "origin", "HEAD"]);
+  run("git", ["push", "origin", `v${next}`]);
+  console.error(`[release] ✓ 已提交并推送（含 tag v${next}）`);
+} catch (err) {
+  console.error(
+    `\n[release] ⚠ npm 已发布 ${next}，但 git 提交/推送失败：` +
+      `${err instanceof Error ? err.message : String(err)}\n` +
+      "  请手动完成：git add package.json package-lock.json && " +
+      `git commit -m "chore(release): 发布 ${next}" && git tag v${next} && git push origin HEAD --tags`,
+  );
+  process.exit(1);
+}
+
+console.error(`\n[release] 全部完成：${pkg.name}@${next}`);

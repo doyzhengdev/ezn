@@ -59,7 +59,8 @@
     "prepublishOnly": "npm test",
     "typecheck": "tsc",
     "update-assets": "node scripts/update-node-assets.mjs",
-    "test": "tsdown && npx vitest run"
+    "test": "tsdown && npx vitest run",
+    "release": "node scripts/release.mts"
   },
   "dependencies": {
     "extract-zip": "^2.0.1",
