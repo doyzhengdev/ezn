@@ -252,7 +252,11 @@ async function ensureTools(dir: string, config: PinnedNode): Promise<void> {
       console.error(`[ezn] 正在安装工具 ${spec === "*" ? `${name}（最新版）` : target}（装到：${dir}）...`);
       try {
         const npmCli = resolveBundledCli(dir, "npm");
-        await spawnInherit(nodeExecPath(dir), [npmCli, "install", "-g", "--prefix", dir, target, "--ignore-scripts"], {
+        // **不得加 --ignore-scripts**：pnpm 12 起包根那个 `pnpm` 是无扩展名的占位脚本，靠 preinstall/
+        // postinstall 把它替换成 pnpm.exe 并改写 bin（见 pnpm 包内的 install.js）。跳过脚本则替换不发生，
+        // npm 生成的 shim 仍指向占位脚本：POSIX 上 sh 遇 ENOEXEC 会回退执行它，Windows 上 cmd.exe 既不
+        // 回退也不认无扩展名文件，pnpm 直接不可用（实测报「不是内部或外部命令」）。
+        await spawnInherit(nodeExecPath(dir), [npmCli, "install", "-g", "--prefix", dir, target], {
           env: { ...process.env, PATH: childPath(dir) },
         });
       } catch (err) {
@@ -436,13 +440,21 @@ export function withGlobalPrefix(dir: string, args: readonly string[]): string[]
 }
 
 /**
+ * JS 脚本扩展名（`.js`/`.mjs`/`.cjs`）——Windows 上 spawn 无法直接执行这类文件（报 EFTYPE），
+ * 且其 shebang 是 `#!/usr/bin/env node`，交给子进程就会命中**宿主** node。故须显式用运行时
+ * node 执行。见 {@link resolveCommand} 的路径分支。
+ */
+const SCRIPT_EXT_RE = /\.(js|mjs|cjs)$/i;
+
+/**
  * 解析要执行的命令。
  *
  * 顺序（命中即返回）：
  * 1. `node` / `npm` / `npx` → 本运行时（`node.exe` 本体 / `node <npm-cli.js>`）——**显式分发**，
  *    有意绕过运行时根下的 `npm.cmd` shim：那个 shim 会去查全局 prefix，宿主存在另一份 npm 时
  *    就会被劫持（`node.ts` 的同名注释记着这条实测教训）。`npx` 随 npm 包发布，入口同源解析。
- * 2. 含路径分隔符 → 视为路径原样执行
+ * 2. 含路径分隔符 → 视为路径。目标是 JS 脚本（`.js`/`.mjs`/`.cjs`）时用运行时 node 执行——
+ *    路径本身是用户指定的，不改写；但执行它的解释器必须是运行时（见 {@link SCRIPT_EXT_RE}）。
  * 3. 运行时目录下的同名可执行
  * 4. 从 cwd 逐级向上找 `node_modules/.bin/<name>`
  * 5. PATH 查找（补全 `.cmd`/`.bat`/`.exe` 后缀）——`pnpm`、`git` 这类宿主安装的命令靠这步，
@@ -462,7 +474,17 @@ export function resolveCommand(dir: string, name: string): { file: string; prefi
     ].find((candidate) => existsSync(candidate));
     if (cli) return { file: nodeExecPath(dir), prefixArgs: [cli] };
   }
-  if (name.includes("/") || name.includes("\\")) return { file: name, prefixArgs: [] };
+  if (name.includes("/") || name.includes("\\")) {
+    // 路径分隔符在 Windows 上统一成反斜杠：经 shell 执行时 cmd.exe 把 `/` 当选项开关，
+    // `./foo.cmd` 会被它解析成「'.' 不是内部或外部命令」。POSIX 下 `\` 是合法文件名字符，
+    // 故只在 Windows 上转换（IS_WIN 与 shell 判据同源，见 main）。
+    const target = IS_WIN ? name.replace(/\//g, "\\") : name;
+    // JS 脚本显式交运行时 node 执行：既避开 Windows 的 EFTYPE（spawn 不能直接执行 .js/.mjs），
+    // 也兑现「固定版本」——否则 shebang 会让它在**宿主** node 上跑。
+    return SCRIPT_EXT_RE.test(target)
+      ? { file: nodeExecPath(dir), prefixArgs: [target] }
+      : { file: target, prefixArgs: [] };
+  }
   const hit = resolveInRuntime(dir, name) ?? resolveInAncestors(process.cwd(), name) ?? resolveInPath(name);
   return { file: hit ?? name, prefixArgs: [] };
 }

@@ -2,6 +2,8 @@
 
 > 在项目固定版本的托管 Node 上执行任意命令。零系统依赖，不用装 nvm / fnm / volta。
 
+[English](README.en.md) | 简体中文
+
 `ezn` 按需把一个固定版本的 Node 运行时下载并落位到**项目自己的** `node/` 目录，然后在该运行时上执行你给的命令——`vitest`、`tsc`、`vite`，或任何别的东西。
 
 ```bash
@@ -90,7 +92,7 @@ npm install -D @doyzheng/ezn
 
 ### 工具（`tools`）
 
-声明在这里的工具会被装进**运行时目录**（`<项目>/node/node_modules/`），而不是宿主的全局目录——版本随项目走，不受机器上装了什么影响。
+声明在这里的工具会被装进**运行时目录**（Windows 为 `<项目>/node/node_modules/`，POSIX 为 `<项目>/node/lib/node_modules/`），而不是宿主的全局目录——版本随项目走，不受机器上装了什么影响。
 
 ```json
 "ezn": { "node": "24", "tools": { "pnpm": "10.34.5" } }
@@ -113,16 +115,69 @@ npm install -D @doyzheng/ezn
   **想强制重装 latest 就删掉那个标记文件**
 - **失败只警告，不阻塞命令**（断网时 `ezn pnpm ...` 仍会回落到宿主 PATH 的那份）
 
+> 装工具时会执行包自身的 lifecycle 脚本（**不加 `--ignore-scripts`**）。这是必需的：`pnpm` 12 起
+> 包根那个 `pnpm` 是无扩展名的占位脚本，靠 `postinstall` 把它替换成原生二进制并改写 `bin`；
+> 跳过脚本会让 Windows 下的 `pnpm.cmd` 指向一个 cmd.exe 执行不了的文件（报「不是内部或外部命令」）。
+> 代价是自动装工具时会执行被装包的安装脚本，请自行评估供应链信任。
+
 > 配置写错时**一定会报警**：非字符串版本、非法版本描述、空包名都会打印 `[ezn] 忽略…`。
 > 静默丢弃是最难排查的一类配置错误（表现为「明明配了却没装」），故不做静默处理。
 
-> ⚠️ **`0.1.0` 起配置键名由 `ezllm-node` 改为 `ezn`**，与包名一致。旧键名**不再被读取**，既有项目需手工改名：把 `package.json` 里的 `"ezllm-node"` 段整体改名为 `"ezn"`。
+> ⚠️ **配置键名曾是 `ezllm-node`**（0.0.1 时代），自 **0.0.2** 起改为 `ezn`，与包名一致。
+> 旧键名**不再被读取**，既有项目需手工改名：把 `package.json` 里的 `"ezllm-node"` 段整体改名为 `"ezn"`。
 
 **务必把运行时目录加进 `.gitignore`**，否则上百 MB 的运行时会被 git 追踪：
 
 ```gitignore
 /node/
 ```
+
+## 平台支持
+
+支持 **Windows / macOS / Linux** 三平台，各含 `x64` 与 `arm64`：
+
+| 平台 | `process.platform-arch` | 发行包 | 解压 |
+|---|---|---|---|
+| Windows x64 | `win32-x64` | zip | `extract-zip` |
+| Windows arm64 | `win32-arm64` | zip | `extract-zip` |
+| macOS Intel | `darwin-x64` | tar.gz | `tar` |
+| macOS Apple Silicon | `darwin-arm64` | tar.gz | `tar` |
+| Linux x64 | `linux-x64` | tar.gz | `tar` |
+| Linux arm64 | `linux-arm64` | tar.gz | `tar` |
+
+其它组合（`linux-ia32`、`linux-ppc64le`、`linux-s390x`、`win32-ia32`、BSD 等）会在安装时抛出
+**「暂不支持的平台」**并给出手动放置指引。若你已在目标目录手动放好运行时，则不会触发下载、也就不会报这个错。
+
+### 验证状态（请务必读）
+
+上表是**声明支持**，不等于**逐一验证过**。实际情况：
+
+| 平台 | 验证程度 |
+|---|---|
+| Windows x64 | 开发与全部测试的所在平台，覆盖较充分 |
+| Linux / macOS | 由下游项目（`ezllm`）的跨平台 CI 间接覆盖——它的包脚本经 `ezn` 调用，会真实完成下载 + 解压 + 落位 + 执行（具体架构取决于其使用的 runner 标签） |
+| arm64（各平台） | **未被本包自身的测试覆盖** |
+
+本仓库**自身没有 CI**，且单元测试只在一个平台上跑——平台相关的断言写法是「在本机断言、在他机跳过」，
+所以非本机分支的**测试覆盖率实际为 0**。此外 tar.gz 解压链路在单测里被 mock，未在仓库内端到端跑过。
+
+> 换句话说：Windows x64 之外，请把本包当作**「设计上支持、但未充分验证」**来评估。
+
+### 已知限制
+
+- **Alpine / musl 不支持，且失败方式不友好。** 平台键只看 `platform-arch`，musl 上仍是 `linux-x64`，
+  于是会下载 glibc 构建 → 解压成功 → **执行失败 → 判定「疑似损坏」→ 反复重装**。容器化部署请用
+  glibc 基础镜像，或改用 `nodeBin` 指向自备的 musl 版 node。
+- **运行时目录不可跨平台共享。** 合并路径（共享目录的判定）在**模块加载时**按当前平台固化，
+  且锁名不含平台段。若把同一个 `<项目>/node` 放到多台异构机共享（漫游目录、WSL 访问 Windows 目录、
+  网络盘），会互相覆盖对方的 node、来回重装约 100MB。请把运行时目录放在**平台独占**的位置。
+- **POSIX 权限位依赖 tar 还原，无兜底。** 代码不做 `chmod`；若某个镜像重打包丢了执行位，
+  会进入「探测失败 → 重装 → 仍失败」的循环（报错只说「疑似损坏」）。
+- **大小写敏感性差异。** 配置键、包名、落位时的同名判定都未做大小写归一。在大小写不敏感的文件系统上
+  （Windows / macOS 默认），`{"EZN":{"NODE":"22"}}` 能读到、在 Linux 上会被静默忽略；
+  `README.md` 与 `readme.md` 在落位时会被视为同名项。请统一用小写。
+- **源码 clone 后 `./bin/ezn.js` 在 POSIX 上不可直接执行**（git 里是 `100644`）。属正常：
+  装成依赖（`npm i -D @doyzheng/ezn`）时 npm 会补上执行位；只从源码跑请用 `node bin/ezn.js`。
 
 ## 用法
 
@@ -157,12 +212,15 @@ ezn npm run build         # 原样透传 → 在当前项目里跑脚本
 命令查找顺序（命中即返回）：
 
 1. `node` / `npm` / `npx` → 本运行时的对应可执行
-2. 含路径分隔符 → 当作路径直接执行
+2. 含路径分隔符 → 当作路径执行。目标是 `.js` / `.mjs` / `.cjs` 时**用运行时 node 执行它**——
+   否则会因 shebang 落到宿主 node，且 Windows 上直接 spawn 这类文件会报 `EFTYPE`
 3. 运行时目录下的同名可执行（`npm i -g` 装的包会落在那里）
 4. 自当前目录逐级向上找 `node_modules/.bin/<名字>`
 5. 系统 `PATH`
 
 所以 `ezn vitest run` 里的 `vitest` 由**你的项目**提供，`ezn` 自己不依赖它——但它在第 4 步才被找到，即仍需正常安装项目依赖。
+
+子进程的 `PATH` 会把运行时目录前置，因此在第 3–5 步命中的命令**内部再调 `node` 时，命中的仍是本运行时的 node**——这是「固定版本」承诺的一部分。
 
 ### 环境变量
 
@@ -200,10 +258,14 @@ CJS / ESM 双形态，`engines: >=16`。
 
 ```
 <项目>/node/
-├── node.exe          ← Windows；POSIX 为 bin/node
-├── node_modules/npm/ ← 自带 npm / npx / corepack
-└── lib/node_modules/ ← POSIX 下是这个位置
+├── node.exe                    ← Windows；POSIX 为 bin/node
+├── node_modules/npm/           ← 自带 npm / npx / corepack
+├── node_modules/pnpm/          ← `ezn.tools` 装的工具（你装的全局包也在这里）
+└── lib/node_modules/           ← POSIX 下自带包与全局包都在这个位置
 ```
+
+（Windows 的包在 `<rt>/node_modules/`，POSIX 的在 `<rt>/lib/node_modules/`——这是两平台 npm 全局
+布局的差异，代码在两个位置都会查找。上图画在一起只为说明「自带包与托管包同处一个共享目录」。）
 
 没有版本目录层（不是 nvm 的 `versions/v22.13.5/`），因为版本由配置唯一定义，一个项目只需要一个运行时。
 
@@ -227,14 +289,21 @@ CJS / ESM 双形态，`engines: >=16`。
 ```bash
 npm install
 npm run build          # tsdown（rolldown）→ dist/
-npm test               # 构建 + 跑全部测试（99 个）
+npm test               # 构建 + 跑全部测试（100 个）
 npm run typecheck
 npm run update-assets  # 拉 nodejs.org 刷新 src/versions.json（需联网）
 ```
 
-`dist/` 不入库，由 `prepack` 在发布时重新构建。
+`dist/` 已 gitignore、不入库，但**在 `package.json` 的 `files` 里**——发布前**必须**先 `npm run build`，
+否则会发出缺产物或产物陈旧的包。`npm run release` 只做「bump 版本 → `npm publish` → 提交打 tag」，
+**它自己不再触发构建与测试**（`prepack` / `prepublishOnly` 已于 0.0.6 移除）。
 
 `src/versions.json` 是版本表的**唯一事实源**，由 `scripts/update-node-assets.mjs` 生成，**不要手改**。要新增支持的主版本，改那个脚本顶部的 `MAJOR_FROM` / `MAJOR_TO` 后重跑。
+
+> **加平台相关改动前请读**：本仓库无 CI，测试只在当前平台真实执行，非本机分支靠
+> `if (process.platform === "win32")` 跳过。改动涉及平台分支时，请至少在本机跑通，
+> 并明确告知「未在哪些平台验证」。`test/flat-ensure.test.ts` 用覆写 `process.platform`
+> + `vi.resetModules()` 模拟 POSIX 合并路径，可参考那种写法补覆盖。
 
 ## License
 

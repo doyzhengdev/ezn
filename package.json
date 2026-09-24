@@ -28,6 +28,7 @@
     "bin",
     "dist",
     "README.md",
+    "README.en.md",
     "LICENSE"
   ],
   "keywords": [

@@ -10,9 +10,10 @@
  *   1. 前置校验：工作区干净、在 git 仓库、.env 有 NPM_TOKEN
  *   2. 向 registry 查最新已发布版本（而不是读本地 package.json——本地可能落后于线上）
  *   3. patch +1
- *   4. npm publish —— 校验与构建由 package.json 的既有钩子承担：`prepublishOnly` 跑 `npm test`
- *      （tsdown + vitest），`prepack` 再跑一次 tsdown 产出最终产物。**本脚本不重复跑这两步**，
- *      否则 tsdown 会连跑三次、vitest 两次。测试失败会让 publish 失败，脚本随即回滚版本号。
+ *   4. npm publish —— **注意：0.0.6 起 `prepack` / `prepublishOnly` 已移除，publish 不会再自动
+ *      构建或跑测试**，而本脚本自己也不跑。故发布前**必须**先手工 `npm run build`，
+ *      否则会发出缺产物或产物陈旧的包（`dist/` 已 gitignore、但列在 `files` 里）。
+ *      要恢复「发布即校验」请把这两个钩子加回 package.json。
  *   5. git add + commit + tag + push（含 tag）
  *
  * **发布失败时回滚版本号**：把 package.json 恢复原值、并恢复任何已改的工作区文件，
@@ -58,11 +59,7 @@ function run(cmd: string, args: readonly string[], opts: { cwd?: string } = {}):
 
 /** 跑一条命令并捕获 stdout（用于读取型命令，如 npm view / git status）。 */
 function capture(cmd: string, args: readonly string[], opts: { cwd?: string } = {}): string {
-  return execFileSync(cmd, args, {
-    cwd: opts.cwd ?? pkgRoot,
-    encoding: "utf-8",
-    shell: needsShell(cmd),
-  }).trim();
+  return execFileSync(cmd, args, { cwd: opts.cwd ?? pkgRoot, encoding: "utf-8", shell: needsShell(cmd) }).trim();
 }
 
 interface Pkg {
@@ -163,10 +160,9 @@ try {
   writeFileSync(pkgPath, `${JSON.stringify({ ...pkg, version: next }, null, 2)}\n`, "utf-8");
   console.error(`[release] 已写入版本号 ${next}`);
 
-  // 不在此处跑构建/测试：npm publish 会自动触发 package.json 的
-  // `prepublishOnly`（npm test = tsdown + vitest）与 `prepack`（tsdown）。
-  // 任一步失败都会让 publish 失败，下面的 catch 随即回滚版本号。
-  console.error("[release] 发布到 npm（将自动跑 prepublishOnly 的测试与 prepack 的构建）...");
+  // 不在此处跑构建/测试：0.0.6 起 prepack / prepublishOnly 已移除，publish 不做任何校验，
+  // 故发布前须由人事先跑过 build 与 test。publish 失败时下面的 catch 会回滚版本号。
+  console.error("[release] 发布到 npm（不再自动构建/测试，请确认已跑过 build 与 test）...");
   execFileSync("npm", ["publish"], {
     cwd: pkgRoot,
     stdio: "inherit",
