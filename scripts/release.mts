@@ -183,9 +183,11 @@ try {
   fail(`发布失败：${err instanceof Error ? err.message : String(err)}`);
 }
 
-// 发布成功后才提交：顺序反过来的话，提交了却没发出去会留下误导性的提交记录
+// 发布成功后才提交：顺序反过来的话，提交了却没发出去会留下误导性的提交记录。
+// 只提交 package.json：本仓库用 pnpm，而版本号既不进 pnpm-lock.yaml、`npm publish` 也不改它
+// （实测哈希不变），故 lockfile 无需提交。
 try {
-  run("git", ["add", "package.json", "package-lock.json"]);
+  run("git", ["add", "package.json"]);
   run("git", ["commit", "-m", `chore(release): 发布 ${next}`]);
   run("git", ["tag", `v${next}`]);
   run("git", ["push", "origin", "HEAD"]);
@@ -195,7 +197,7 @@ try {
   console.error(
     `\n[release] ⚠ npm 已发布 ${next}，但 git 提交/推送失败：` +
       `${err instanceof Error ? err.message : String(err)}\n` +
-      "  请手动完成：git add package.json package-lock.json && " +
+      "  请手动完成：git add package.json && " +
       `git commit -m "chore(release): 发布 ${next}" && git tag v${next} && git push origin HEAD --tags`,
   );
   process.exit(1);

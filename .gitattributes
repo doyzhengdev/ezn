@@ -7,4 +7,4 @@
 *.gz binary
 
 # lockfile 在 GitHub 上按生成物折叠（不影响 diff）
-package-lock.json linguist-generated=true
+pnpm-lock.yaml linguist-generated=true
