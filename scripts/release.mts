@@ -9,15 +9,20 @@
  * 流程（任一步失败即中止，且不留半成品状态）：
  *   1. 前置校验：工作区干净、在 git 仓库、.env 有 NPM_TOKEN
  *   2. 向 registry 查最新已发布版本（而不是读本地 package.json——本地可能落后于线上）
- *   3. patch +1
- *   4. npm publish —— **注意：0.0.6 起 `prepack` / `prepublishOnly` 已移除，publish 不会再自动
- *      构建或跑测试**，而本脚本自己也不跑。故发布前**必须**先手工 `npm run build`，
- *      否则会发出缺产物或产物陈旧的包（`dist/` 已 gitignore、但列在 `files` 里）。
- *      要恢复「发布即校验」请把这两个钩子加回 package.json。
- *   5. git add + commit + tag + push（含 tag）
+ *   3. patch +1 并写入 package.json
+ *   4. **构建 + 跑测试**（`npm test` = tsdown && vitest）——必须在这一步，理由见下方「顺序」
+ *   5. npm publish
+ *   6. git add + commit + tag + push（含 tag）
  *
- * **发布失败时回滚版本号**：把 package.json 恢复原值、并恢复任何已改的工作区文件，
- * 以免留下「版本号已 bump 但没发出去」的中间态——那种状态下次发版会拿到错误的递增基数。
+ * **为什么构建必须紧跟 bump、且在 publish 之前**：`tsdown.config.mts` 用 `define` 把
+ * `package.json` 的 version 烧进 `dist/cli.js`（`ezn --version` 读的就是它）。所以：
+ *   - 先构建再 bump → 产物里是旧版本号，包发出去但 `ezn --version` 报上一版；
+ *   - bump 后不构建 → 发出的是陈旧产物（`dist/` 已 gitignore、但列在 `files` 里，会照样进包）。
+ * 又因为 0.0.6 起 `prepack` / `prepublishOnly` 已移除，`npm publish` **不再自动**构建或测试，
+ * 这两件事无人兜底，故本脚本显式承担。（想恢复「发布即校验」也可把钩子加回 package.json。）
+ *
+ * **失败时回滚版本号**：把 package.json 恢复原值，以免留下「版本号已 bump 但没发出去」的
+ * 中间态——那种状态下次发版会拿到错误的递增基数。
  *
  * token 从 `.env` 读（该文件已 gitignore，见 .gitignore 的注释）。**绝不把 token 写进产物或提交**：
  * 经 `npm_config_//<host>/:_authToken` 环境变量传给 npm 子进程，不落盘。
@@ -160,9 +165,12 @@ try {
   writeFileSync(pkgPath, `${JSON.stringify({ ...pkg, version: next }, null, 2)}\n`, "utf-8");
   console.error(`[release] 已写入版本号 ${next}`);
 
-  // 不在此处跑构建/测试：0.0.6 起 prepack / prepublishOnly 已移除，publish 不做任何校验，
-  // 故发布前须由人事先跑过 build 与 test。publish 失败时下面的 catch 会回滚版本号。
-  console.error("[release] 发布到 npm（不再自动构建/测试，请确认已跑过 build 与 test）...");
+  // 必须在 bump 之后：tsdown 用 define 把 version 烧进 dist/cli.js（见文件头注「顺序」）。
+  // `npm test` = tsdown && vitest，构建与测试一步到位；测试失败即中止、catch 回滚版本号。
+  console.error("[release] 构建并跑测试（npm test = tsdown && vitest）...");
+  run("npm", ["test"]);
+
+  console.error("[release] 发布到 npm ...");
   execFileSync("npm", ["publish"], {
     cwd: pkgRoot,
     stdio: "inherit",
