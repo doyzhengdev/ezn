@@ -61,14 +61,17 @@
     "test": "tsx scripts/build.mts && npx vitest run",
     "release": "tsx scripts/release.mts"
   },
+  "dependencies": {
+    "got": "^11.8.6",
+    "tar": "^6.2.1",
+    "yauzl": "^3.4.0"
+  },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/tar": "^6.1.13",
-    "extract-zip": "^2.0.1",
-    "got": "^11.8.6",
+    "@types/yauzl": "^3.4.0",
     "prettier": "^3.9.8",
     "rolldown-plugin-dts": "^0.28.6",
-    "tar": "^6.2.1",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vite": "^8.3.0",

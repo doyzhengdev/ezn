@@ -138,8 +138,8 @@ npm install -D @doyzheng/ezn
 
 | 平台 | `process.platform-arch` | 发行包 | 解压 |
 |---|---|---|---|
-| Windows x64 | `win32-x64` | zip | `extract-zip` |
-| Windows arm64 | `win32-arm64` | zip | `extract-zip` |
+| Windows x64 | `win32-x64` | zip | `yauzl` |
+| Windows arm64 | `win32-arm64` | zip | `yauzl` |
 | macOS Intel | `darwin-x64` | tar.gz | `tar` |
 | macOS Apple Silicon | `darwin-arm64` | tar.gz | `tar` |
 | Linux x64 | `linux-x64` | tar.gz | `tar` |
@@ -299,7 +299,7 @@ npm run update-assets  # 拉 nodejs.org 刷新 src/versions.json（需联网）
 提交打 tag」；构建与测试**必须**排在 bump 之后——版本号由构建期 define 烧进 `dist/cli.js`，
 顺序颠倒会发出「`ezn --version` 报上一版」的包。
 
-发布产物**全量内联**：版本表与 got/tar/extract-zip（含传递依赖）都打进 `dist/`，`dependencies` 为空
+发布产物**全量内联**：版本表与 got/tar/yauzl（含传递依赖）都打进 `dist/`，`dependencies` 为空
 ——装上即可用，消费者不会单独安装这些包。代价是改动依赖版本后必须重新构建并随本包发版。
 
 `src/versions.json` 是版本表的**唯一事实源**，由 `scripts/update-node-assets.mts` 生成，**不要手改**。要新增支持的主版本，改那个脚本顶部的 `MAJOR_FROM` / `MAJOR_TO` 后重跑。

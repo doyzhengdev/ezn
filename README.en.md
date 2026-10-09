@@ -140,8 +140,8 @@ Supported on **Windows / macOS / Linux**, each with `x64` and `arm64`:
 
 | Platform | `process.platform-arch` | Archive | Extraction |
 |---|---|---|---|
-| Windows x64 | `win32-x64` | zip | `extract-zip` |
-| Windows arm64 | `win32-arm64` | zip | `extract-zip` |
+| Windows x64 | `win32-x64` | zip | `yauzl` |
+| Windows arm64 | `win32-arm64` | zip | `yauzl` |
 | macOS Intel | `darwin-x64` | tar.gz | `tar` |
 | macOS Apple Silicon | `darwin-arm64` | tar.gz | `tar` |
 | Linux x64 | `linux-x64` | tar.gz | `tar` |
@@ -332,7 +332,7 @@ run `npm run build` before publishing, or you will publish a package with missin
 and tests **must** come after the bump — the version is burned into `dist/cli.js` by a build-time define,
 and reversing the order ships a package whose `ezn --version` reports the previous release.
 
-Published artifacts are **fully inlined**: the version table and got/tar/extract-zip (with their transitive
+Published artifacts are **fully inlined**: the version table and got/tar/yauzl (with their transitive
 dependencies) are bundled into `dist/`, and `dependencies` is empty — consumers install nothing extra.
 The trade-off: bumping a dependency requires a rebuild and a new release of this package.
 

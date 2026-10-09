@@ -23,7 +23,7 @@
  *      自包含」；rolldown 要求单入口才能关。
  *   3. **全量内联（`ssr.noExternal: true`）**：发布契约是「零依赖自包含」——bin/ezn.js 加载的
  *      产物不引用包外任何文件（node 内置模块除外，由 ssr 构建自动 external）。故 package.json
- *      的 dependencies 为空：got/tar/extract-zip（含传递依赖）在构建期打进产物，消费者不再
+ *      的 dependencies 为空：got/tar/yauzl（含传递依赖）在构建期打进产物，消费者不再
  *      单独安装它们（三个包只列在 devDependencies，供构建使用）。
  *   4. **版本号经 define 烧进产物**（`__EZN_VERSION__`）：`ezn --version` 读的就是它。发布脚本
  *      因此必须「先 bump 再构建」——见 scripts/release.mts 的顺序约束。
@@ -122,7 +122,7 @@ export default defineConfig((env: ConfigEnv): UserConfig => {
       emptyOutDir: false,
       target: target.target,
       sourcemap: false,
-      // 内联后必须 minify（vite 的 SSR 构建默认 false）：依赖代码（got/tar/extract-zip 及其
+      // 内联后必须 minify（vite 的 SSR 构建默认 false）：依赖代码（got/tar/yauzl 及其
       // 传递依赖）会打进**每个**产物，不压缩时三个产物合计约 1.4MB，压缩后约 690KB。产物里
       // 本包自身代码占比很小，报错栈可读性的让位是有意的。
       minify: true,

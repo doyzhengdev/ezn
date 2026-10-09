@@ -1,7 +1,8 @@
 /**
  * @file Node 下载 + 解压 + 落位：把内置表指定版本的 Node 装进调用者给的目录。
  * @fileoverview
- * 只导出 `installNode(nodeDir, nodeVersion)`——「装到哪」由调用者决定（`Node.ensure` 传 `<appDir>/node`）。
+ * 对外只导出 `installNode(nodeDir, nodeVersion)`——「装到哪」由调用者决定（`Node.ensure` 传
+ * `<appDir>/node`）。另导出 `extractProgressLine`（进度文案渲染，无副作用）供测试直测，属测试面而非 API 面。
  *
  * **落位一律逐条目进行**，绝不删除 nodeDir 内既有的、与本次安装无关的文件：运行时目录同时装着
  * npm 安装的托管包（`<nodeDir>/node_modules/ezn`），整目录覆盖或清空会把包一并抹掉，服务随即
@@ -22,8 +23,8 @@ import { dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import got from "got";
 import * as tar from "tar";
-import extractZip from "extract-zip";
 import { matchNodeVersion, nodeExecPath, nodePlatformKey } from "./runtime.js";
+import { extractZip } from "./unzip.js";
 
 // 平台 → 压缩包目录/扩展名（nodejs.org/dist 命名约定；zip 仅 Windows 系平台）。
 const NODE_PLATFORMS = {
@@ -44,6 +45,32 @@ const MERGE_PATHS: readonly (readonly string[])[] = IS_WIN ? [["node_modules"]] 
 // 用户会把「正常但慢」误判成卡死（实测：解压阶段零输出，与「进程已死」在屏幕上完全一样）。
 const DOWNLOAD_TICK_MS = 5000;
 const EXTRACT_TICK_MS = 3000;
+
+/** 解压进度（两条解压路径共用的展示口径）：bytes 为 null 表示该路径不提供字节进度。 */
+export interface ExtractProgress {
+  /** 已完成条目数 */
+  entries: number;
+  /** 已落盘字节数（含当前条目已写入的部分）；null = 该路径不提供 */
+  bytes: number | null;
+  /** 当前正在处理的条目名；未知（条目之间/尚未开始）为 null */
+  current: string | null;
+}
+
+/**
+ * 把进度快照渲染成一行心跳日志（与下载段的心跳行同形）。
+ *
+ * 导出供直测：这是解压阶段用户能看到的唯一进度文案，其口径（项数 / 字节 / 当前条目）值得钉住
+ * ——只报项数时，官方包里 89 MB 的 node.exe 会让数字长时间不动（见下面的调用点注释）。
+ *
+ * @param progress - 当前进度快照
+ * @param elapsedSec - 解压已用秒数
+ * @returns 一行日志（含 `[ezn]` 前缀与结尾的 ` ...`）
+ */
+export function extractProgressLine(progress: ExtractProgress, elapsedSec: number): string {
+  const size = progress.bytes === null ? "" : `，${Math.round(progress.bytes / 1048576)} MB`;
+  const now = progress.current === null ? "" : `（正在 ${progress.current}）`;
+  return `[ezn]   已解压 ${progress.entries} 项${size}${now}（已用 ${elapsedSec} 秒） ...`;
+}
 
 /** 起一个进度心跳：按 intervalMs 反复打行，返回停止函数。
  *  调用方必须在 finally 里停掉——否则计时器会拖着事件循环不放。
@@ -128,28 +155,37 @@ async function downloadExtract(
           `耗时 ${elapsedSeconds(downloadStartedAt)} 秒），正在解压 ...`,
       );
 
-      // 解压：zip → extract-zip（yauzl 内核，条目路径防穿越）；tar.gz → tar@6（纯 JS，从文件读取
-      // 时按内容嗅探 gzip，unix 下软链接与执行位照常保留）。按 NODE_PLATFORMS 声明的格式分流而非
-      // 按扩展名——下载临时文件无扩展名。onEntry / onentry 只用于进度计数（心跳行的「已解压 N 项」）。
+      // 解压：zip → ./unzip.ts（yauzl@3 直用，条目路径防穿越，逐块上报字节）；tar.gz → tar@6
+      // （纯 JS，从文件读取时按内容嗅探 gzip，unix 下软链接与执行位照常保留）。按 NODE_PLATFORMS
+      // 声明的格式分流而非按扩展名——下载临时文件无扩展名。
+      //
+      // 进度口径：项数 + 字节数（仅 zip 路径能逐块上报，见 ./unzip.ts）+ 当前条目名。为什么必须带
+      // 字节：官方包里 89 MB 的 node.exe 占全部数据的 87%，只报项数时那一行会长时间不动，与
+      // 「进程已死」在屏幕上完全一样（实测报障的正是这条）。tar 路径只在上条目时拿得到名字，
+      // 且 tar@6 不暴露逐块字节，故 bytes 为 null。
       const extractStartedAt = Date.now();
-      let extracted = 0;
-      const countEntry = (): void => {
-        extracted += 1;
-      };
-      const stopExtractTick = startHeartbeat(
-        EXTRACT_TICK_MS,
-        () => `[ezn]   已解压 ${extracted} 项（已用 ${elapsedSeconds(extractStartedAt)} 秒） ...`,
+      let progress: ExtractProgress = { entries: 0, bytes: null, current: null };
+      const stopExtractTick = startHeartbeat(EXTRACT_TICK_MS, () =>
+        extractProgressLine(progress, elapsedSeconds(extractStartedAt)),
       );
       try {
         if (opts.platform.ext === "zip") {
-          await extractZip(tmpArchive, { dir: extractDir, onEntry: countEntry });
+          await extractZip(tmpArchive, extractDir, (snapshot) => {
+            progress = snapshot;
+          });
         } else {
-          await tar.x({ file: tmpArchive, cwd: extractDir, onentry: countEntry });
+          await tar.x({
+            file: tmpArchive,
+            cwd: extractDir,
+            onentry: (entry) => {
+              progress = { entries: progress.entries + 1, bytes: null, current: entry.path };
+            },
+          });
         }
       } finally {
         stopExtractTick();
       }
-      console.error(`[ezn] 解压完成（${extracted} 项，耗时 ${elapsedSeconds(extractStartedAt)} 秒）`);
+      console.error(`[ezn] 解压完成（${progress.entries} 项，耗时 ${elapsedSeconds(extractStartedAt)} 秒）`);
 
       // 上提一层去掉顶层版本目录（node-v24.9.0-win-x64/… → 内容直接落在 src 下）。
       const entries = readdirSync(extractDir);

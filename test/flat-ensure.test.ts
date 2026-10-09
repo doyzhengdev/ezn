@@ -2,10 +2,10 @@
 // 的落位语义——核心安全要求是该目录内由 npm 安装的包（<rt>/node_modules/ezn，POSIX 为
 // <rt>/lib/node_modules/ezn）不被挪走、不被覆盖，同时 node 自带 npm/corepack 仍能装进去。
 //
-// 不做网络 I/O：**只 mock 掉最外层三个 I/O 依赖**（got / tar / extract-zip），落位逻辑本身
-// （installNode → downloadExtract → materializeFlat）全是真实执行——覆盖比过去「直接调内部
-// materializeFlat」更完整（连 mkdir / 临时区 / cleanup 一并验到）。mock 的 extractArchive 把
-// 「解压就绪的源目录」铺进解压区，等价于真实解压结果。
+// 不做网络 I/O：**只 mock 掉最外层三个 I/O 依赖**（got / tar / 本包自己的解压封装
+// src/unzip.ts），落位逻辑本身（installNode → downloadExtract → materializeFlat）全是真实执行
+// ——覆盖比过去「直接调内部 materializeFlat」更完整（连 mkdir / 临时区 / cleanup 一并验到）。
+// mock 的解压把「解压就绪的源目录」铺进解压区，等价于真实解压结果。
 //
 // 合并路径按平台在模块加载时确定（src/install.ts 的 MERGE_PATHS），故 POSIX 形态用
 // `vi.resetModules()` + 覆写 process.platform 后重新加载模块来测。
@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isFlatRuntimeReady, resolveBundledCli } from "../src/runtime.js";
+import { extractProgressLine } from "../src/install.js";
 import { Node } from "../src/index.js";
 
 // —— 最外层 I/O 依赖打桩：下载写成空文件，解压把预置的源内容铺进目标目录 ——
@@ -38,16 +39,27 @@ vi.mock("got", async () => {
 });
 
 vi.mock("tar", () => ({
-  x: async ({ cwd, onentry }: { cwd: string; onentry?: () => void }) => {
-    Object.values(extractSource).forEach(() => onentry?.());
+  x: async ({ cwd, onentry }: { cwd: string; onentry?: (entry: { path: string }) => void }) => {
+    Object.keys(extractSource).forEach((rel) => onentry?.({ path: rel }));
     materializeSource(cwd);
   },
 }));
 
-vi.mock("extract-zip", () => ({
-  default: async (_archive: string, opts: { dir: string; onEntry?: () => void }) => {
-    Object.values(extractSource).forEach(() => opts.onEntry?.());
-    materializeSource(opts.dir);
+// 解压封装是**本包自己的模块**（src/unzip.ts，yauzl@3 直用），其内部逻辑由 test/unzip.test.ts
+// 直接覆盖；这里只负责「把预置的源内容铺进解压区」，并补上进度快照（口径与真实实现一致）。
+vi.mock("../src/unzip.js", () => ({
+  extractZip: async (
+    _archive: string,
+    dir: string,
+    onProgress?: (progress: { entries: number; bytes: number; current: string | null }) => void,
+  ) => {
+    let entries = 0;
+    for (const rel of Object.keys(extractSource)) {
+      entries += 1;
+      onProgress?.({ entries, bytes: 0, current: rel });
+    }
+    onProgress?.({ entries, bytes: 0, current: null });
+    materializeSource(dir);
   },
 }));
 
@@ -459,5 +471,20 @@ describe("落位（逐条目 + 共享目录按子项合并）——驱动真实 
       spy.mockRestore();
       rmSync(progressDir, { recursive: true, force: true });
     }
+  });
+
+  it("解压进度行：zip 路径报字节与当前条目，tar 路径不报字节；未开始时不留空字段", () => {
+    // zip 路径（./unzip.ts 逐块上报字节）：项数 + 字节 + 当前条目——大文件期间这一行才会动
+    expect(
+      extractProgressLine({ entries: 6, bytes: 50 * 1048576, current: "node-v24.21.0-win-x64/node.exe" }, 15),
+    ).toBe("[ezn]   已解压 6 项，50 MB（正在 node-v24.21.0-win-x64/node.exe）（已用 15 秒） ...");
+    // tar 路径：tar@6 不暴露逐块字节，故只报项数与当前条目（不显示 0 MB 这种假信息）
+    expect(extractProgressLine({ entries: 2, bytes: null, current: "lib/node" }, 5)).toBe(
+      "[ezn]   已解压 2 项（正在 lib/node）（已用 5 秒） ...",
+    );
+    // 解压刚开始时心跳可能先响一次
+    expect(extractProgressLine({ entries: 0, bytes: null, current: null }, 3)).toBe(
+      "[ezn]   已解压 0 项（已用 3 秒） ...",
+    );
   });
 });

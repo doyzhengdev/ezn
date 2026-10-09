@@ -6,7 +6,7 @@
  * - `dist/` 是 gitignore 的构建产物，全新 clone 后不存在（npm 安装的包则始终带着它，见 package.json
  *   的 files 与 prepack）。直接指向它，源码 clone 后用户敲 `ezn vitest run` 只会得到 Node 的
  *   `Cannot find module`；经这一层可以给出「先跑 npm run build」的可操作指引。
- * - 版本表（versions.json）与全部运行时依赖（got/tar/extract-zip，含传递依赖）都由打包器
+ * - 版本表（versions.json）与全部运行时依赖（got/tar/yauzl，含传递依赖）都由打包器
  *   内联进产物：启动器与产物都不引用包外文件（零依赖自包含，见 vite.config.mts 契约 3）。
  *
  * 本文件可能被**任意版本**的 node 执行（挂在宿主 node 18 上跑是常态），故只用 CommonJS 语法，
