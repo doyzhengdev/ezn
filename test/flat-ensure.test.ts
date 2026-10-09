@@ -38,13 +38,15 @@ vi.mock("got", async () => {
 });
 
 vi.mock("tar", () => ({
-  x: async ({ cwd }: { cwd: string }) => {
+  x: async ({ cwd, onentry }: { cwd: string; onentry?: () => void }) => {
+    Object.values(extractSource).forEach(() => onentry?.());
     materializeSource(cwd);
   },
 }));
 
 vi.mock("extract-zip", () => ({
-  default: async (_archive: string, opts: { dir: string }) => {
+  default: async (_archive: string, opts: { dir: string; onEntry?: () => void }) => {
+    Object.values(extractSource).forEach(() => opts.onEntry?.());
     materializeSource(opts.dir);
   },
 }));
@@ -436,5 +438,26 @@ describe("落位（逐条目 + 共享目录按子项合并）——驱动真实 
     // lib/node_modules 合并：自带包并入、托管包原样
     expect(readdirSync(join(posixRt, "lib", "node_modules")).sort()).toEqual(["corepack", "ezn", "npm"]);
     expect(listTree(join(posixRt, "lib", "node_modules", "ezn"))).toEqual(pkgTree);
+  });
+
+  it("解压阶段不再静默：完成行含项数与耗时、落位前有提示（进度口径回归）", async () => {
+    // 独立临时目录（不复用 describe 级 rt）：本用例只驱动一次 installNode，自带建/删不参与套件布局
+    const progressDir = mkdtempSync(join(tmpdir(), "ezn-progress-"));
+    setExtractSource({ "node.exe": "NODE_BIN", "node_modules/npm/bin/npm-cli.js": "RUNTIME_NPM_CLI" });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { installNode } = await import("../src/install.js");
+      await installNode(progressDir, "18");
+      const lines = spy.mock.calls.map((call) => String(call[0]));
+      // 下载完成行带体积与耗时（打桩的 got 是空流 → 0 MB）
+      expect(lines.some((line) => line.includes("下载完成（0 MB") && line.includes("正在解压"))).toBe(true);
+      // 解压完成行的项数 = 预置源文件数（2）
+      expect(lines.some((line) => line.includes("解压完成（2 项"))).toBe(true);
+      // 落位阶段有边界提示
+      expect(lines.some((line) => line.includes("正在落位运行时文件"))).toBe(true);
+    } finally {
+      spy.mockRestore();
+      rmSync(progressDir, { recursive: true, force: true });
+    }
   });
 });

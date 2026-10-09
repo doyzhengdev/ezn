@@ -1,6 +1,6 @@
 {
   "name": "@doyzheng/ezn",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "在项目固定版本的托管 Node 上执行任意命令：按需下载/落位 Node 运行时，零系统依赖（npx nve 22 的替代）",
   "license": "MIT",
   "type": "commonjs",
@@ -55,24 +55,23 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "tsx scripts/build.mts",
     "typecheck": "tsc",
-    "update-assets": "node scripts/update-node-assets.mjs",
-    "test": "tsdown && npx vitest run",
+    "update-assets": "tsx scripts/update-node-assets.mts",
+    "test": "tsx scripts/build.mts && npx vitest run",
     "release": "tsx scripts/release.mts"
-  },
-  "dependencies": {
-    "extract-zip": "^2.0.1",
-    "got": "^11.8.6",
-    "tar": "^6.2.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/tar": "^6.1.13",
-    "tsdown": "^0.23.0",
-    "typescript": "^5.9.3",
-    "vitest": "^2.1.9",
+    "extract-zip": "^2.0.1",
+    "got": "^11.8.6",
     "prettier": "^3.9.8",
-    "tsx": "^4.23.15"
+    "rolldown-plugin-dts": "^0.28.6",
+    "tar": "^6.2.1",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
   }
 }

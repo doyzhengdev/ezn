@@ -288,17 +288,21 @@ CJS / ESM 双形态，`engines: >=16`。
 
 ```bash
 npm install
-npm run build          # tsdown（rolldown）→ dist/
-npm test               # 构建 + 跑全部测试（100 个）
+npm run build          # vite 8（rolldown）→ dist/
+npm test               # 构建 + 跑全部测试（101 个）
 npm run typecheck
 npm run update-assets  # 拉 nodejs.org 刷新 src/versions.json（需联网）
 ```
 
 `dist/` 已 gitignore、不入库，但**在 `package.json` 的 `files` 里**——发布前**必须**先 `npm run build`，
-否则会发出缺产物或产物陈旧的包。`npm run release` 只做「bump 版本 → `npm publish` → 提交打 tag」，
-**它自己不再触发构建与测试**（`prepack` / `prepublishOnly` 已于 0.0.6 移除）。
+否则会发出缺产物或产物陈旧的包。`npm run release` = 「bump 版本 → 构建并跑测试 → `npm publish` →
+提交打 tag」；构建与测试**必须**排在 bump 之后——版本号由构建期 define 烧进 `dist/cli.js`，
+顺序颠倒会发出「`ezn --version` 报上一版」的包。
 
-`src/versions.json` 是版本表的**唯一事实源**，由 `scripts/update-node-assets.mjs` 生成，**不要手改**。要新增支持的主版本，改那个脚本顶部的 `MAJOR_FROM` / `MAJOR_TO` 后重跑。
+发布产物**全量内联**：版本表与 got/tar/extract-zip（含传递依赖）都打进 `dist/`，`dependencies` 为空
+——装上即可用，消费者不会单独安装这些包。代价是改动依赖版本后必须重新构建并随本包发版。
+
+`src/versions.json` 是版本表的**唯一事实源**，由 `scripts/update-node-assets.mts` 生成，**不要手改**。要新增支持的主版本，改那个脚本顶部的 `MAJOR_FROM` / `MAJOR_TO` 后重跑。
 
 > **加平台相关改动前请读**：本仓库无 CI，测试只在当前平台真实执行，非本机分支靠
 > `if (process.platform === "win32")` 跳过。改动涉及平台分支时，请至少在本机跑通，

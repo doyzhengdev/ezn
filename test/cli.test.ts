@@ -242,7 +242,9 @@ describe("运行时目录推导", () => {
   it("主版本 / 组件级前缀 / 完整版本 → 同一版本（复用同一份运行时）", () => {
     const major = resolveRuntimeDir("22", tmpRoot);
     expect(resolveRuntimeDir("22.23", tmpRoot).version).toBe(major.version);
-    expect(resolveRuntimeDir("22.23.2", tmpRoot).version).toBe(major.version);
+    // 完整版本号从内置表派生而非硬编码：表经 update-assets 更新后，写死的三段版本号必然漂移
+    // （实测踩过：表升到 v22.23.3 后，写死的 "22.23.2" 直接失败）
+    expect(resolveRuntimeDir(major.version.replace(/^v/, ""), tmpRoot).version).toBe(major.version);
   });
 
   it("非法版本 / 未内置版本 → 抛可操作错误（不创建任何目录）", () => {

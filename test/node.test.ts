@@ -88,10 +88,11 @@ describe("构建产物双形态冒烟（CJS/ESM）", () => {
   });
 
   it("CLI 产物就位且可加载出 main（bin/ezn.js 的加载路径契约）", async () => {
-    // 为什么必须有这条：bin/ezn.js 硬编码加载某个产物文件名，而该名字由 tsdown.config.mts 的
-    // **entry 键**决定。两者错位时构建照常成功、其余测试全绿，CLI 却报「未找到构建产物」
-    // （实测踩过：键改为 cli 而未同步启动器）。故此处**从 bin/ezn.js 源码反读它实际加载的路径**，
-    // 再断言该文件存在且能加载出 main——这样无论两边叫什么名字，只要不一致就会失败。
+    // 为什么必须有这条：bin/ezn.js 硬编码加载某个产物文件名，而该名字由 vite.config.mts 的
+    // **入口路径**（entryFileNames 的 `[name]` 取自入口基名）决定。两者错位时构建照常成功、
+    // 其余测试全绿，CLI 却报「未找到构建产物」（实测踩过：产物名改了而未同步启动器）。故此处
+    // **从 bin/ezn.js 源码反读它实际加载的路径**，再断言该文件存在且能加载出 main——这样无论
+    // 两边叫什么名字，只要不一致就会失败。
     const binSrc = readFileSync(join(process.cwd(), "bin", "ezn.js"), "utf8");
     const match = /join\(__dirname,\s*"\.\.",\s*"dist",\s*"([^"]+)"\)/.exec(binSrc);
     expect(match, "未能从 bin/ezn.js 解析出产物路径（其写法变了？）").not.toBeNull();

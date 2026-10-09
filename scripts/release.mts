@@ -10,11 +10,11 @@
  *   1. 前置校验：工作区干净、在 git 仓库、.env 有 NPM_TOKEN
  *   2. 向 registry 查最新已发布版本（而不是读本地 package.json——本地可能落后于线上）
  *   3. patch +1 并写入 package.json
- *   4. **构建 + 跑测试**（`npm test` = tsdown && vitest）——必须在这一步，理由见下方「顺序」
+ *   4. **构建 + 跑测试**（`npm test` = 构建（scripts/build.mts）+ vitest）——必须在这一步，理由见下方「顺序」
  *   5. npm publish
  *   6. git add + commit + tag + push（含 tag）
  *
- * **为什么构建必须紧跟 bump、且在 publish 之前**：`tsdown.config.mts` 用 `define` 把
+ * **为什么构建必须紧跟 bump、且在 publish 之前**：`vite.config.mts` 的 `define` 把
  * `package.json` 的 version 烧进 `dist/cli.js`（`ezn --version` 读的就是它）。所以：
  *   - 先构建再 bump → 产物里是旧版本号，包发出去但 `ezn --version` 报上一版；
  *   - bump 后不构建 → 发出的是陈旧产物（`dist/` 已 gitignore、但列在 `files` 里，会照样进包）。
@@ -165,9 +165,9 @@ try {
   writeFileSync(pkgPath, `${JSON.stringify({ ...pkg, version: next }, null, 2)}\n`, "utf-8");
   console.error(`[release] 已写入版本号 ${next}`);
 
-  // 必须在 bump 之后：tsdown 用 define 把 version 烧进 dist/cli.js（见文件头注「顺序」）。
-  // `npm test` = tsdown && vitest，构建与测试一步到位；测试失败即中止、catch 回滚版本号。
-  console.error("[release] 构建并跑测试（npm test = tsdown && vitest）...");
+  // 必须在 bump 之后：构建期 define 把 version 烧进 dist/cli.js（见文件头注「顺序」）。
+  // `npm test` = 构建 + vitest，一步到位；测试失败即中止、catch 回滚版本号。
+  console.error("[release] 构建并跑测试（npm test = scripts/build.mts && vitest）...");
   run("npm", ["test"]);
 
   console.error("[release] 发布到 npm ...");

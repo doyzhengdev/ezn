@@ -5,19 +5,28 @@
 // 更新后须重跑 npm run build 刷新 dist/ 产物。
 // 新增主版本 = 调整下方 MAJOR_FROM/MAJOR_TO 后重跑本脚本。
 //
+// 后缀 .mts：本包是 `type: "commonjs"`，`.ts` 会被 Node 按 CJS 加载（本脚本用 ESM 语法 +
+// 顶层 await）；`.mjs` 同为 ESM，但与 scripts/ 下其余脚本（release.mts / build.mts）统一为
+// .mts——脚本命名只留一种规则。
+//
 // 用法：npm run update-assets（需可访问 nodejs.org）
 
 import { writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const pkgRoot: string = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-const MAJOR_FROM = 18;
-const MAJOR_TO = 26;
+const MAJOR_FROM: number = 18;
+const MAJOR_TO: number = 26;
+
+/** nodejs.org/dist/index.json 里的一条发布记录（本脚本只消费 version） */
+interface Release {
+  version: string;
+}
 
 // 三段 semver 比较（x.y.z 数字逐段比较）
-function compareSemver(a, b) {
+function compareSemver(a: string, b: string): number {
   const pa = String(a).replace(/^v/, "").split(".").map(Number);
   const pb = String(b).replace(/^v/, "").split(".").map(Number);
   for (let i = 0; i < 3; i++) {
@@ -33,9 +42,9 @@ if (!res.ok) {
   console.error(`[update-node-assets] 拉取 index.json 失败：HTTP ${res.status}`);
   process.exit(1);
 }
-const index = await res.json();
+const index = (await res.json()) as Release[];
 
-const latestByMajor = {};
+const latestByMajor: Record<number, Release> = {};
 for (const release of index) {
   const m = /^v(\d+)\./.exec(release.version ?? "");
   const major = m ? Number(m[1]) : 0;
@@ -45,15 +54,13 @@ for (const release of index) {
 }
 
 // —— 2. 写 src/versions.json ——
-const table = {};
-for (const major of Object.keys(latestByMajor)
-  .map(Number)
-  .sort((a, b) => a - b)) {
-  table[String(major)] = { version: latestByMajor[major].version };
+const table: Record<string, { version: string }> = {};
+for (const [major, release] of Object.entries(latestByMajor).sort((a, b) => Number(a[0]) - Number(b[0]))) {
+  table[major] = { version: release.version };
 }
 writeFileSync(resolve(pkgRoot, "src", "versions.json"), JSON.stringify(table, null, 2) + "\n", "utf-8");
 console.log(
   `[update-node-assets] 已生成 ${Object.keys(table).length} 个主版本（${Object.keys(table)
-    .map((k) => `${k}=${table[k].version}`)
+    .map((k) => `${k}=${table[k]?.version}`)
     .join("、")}）→ src/versions.json（记得重跑 npm run build 刷新 dist/ 产物）`,
 );

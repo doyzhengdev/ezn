@@ -37,7 +37,7 @@ export function matchNodeVersion(spec: string): string {
     throw new Error(
       `ezn 内置版本表无匹配 Node ${spec} 的版本（当前内置：` +
         `${available.map(([major, entry]) => `${major}=${entry.version}`).join("、")}）。` +
-        `可改传主版本号（如 18），或经 scripts/update-node-assets.mjs 更新版本表。`,
+        `可改传主版本号（如 18），或经 scripts/update-node-assets.mts 更新版本表。`,
     );
   }
   return hit[1].version;

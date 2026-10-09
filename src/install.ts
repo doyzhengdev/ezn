@@ -40,6 +40,28 @@ const IS_WIN = process.platform === "win32";
 // 共享目录（须逐子项合并，不得整目录备份/跳过）。见文件头注。
 const MERGE_PATHS: readonly (readonly string[])[] = IS_WIN ? [["node_modules"]] : [["lib", "node_modules"]];
 
+// 进度心跳间隔（毫秒）：下载与解压各自按墙钟节流打点。为什么要心跳：这两段可能长时间无任何输出，
+// 用户会把「正常但慢」误判成卡死（实测：解压阶段零输出，与「进程已死」在屏幕上完全一样）。
+const DOWNLOAD_TICK_MS = 5000;
+const EXTRACT_TICK_MS = 3000;
+
+/** 起一个进度心跳：按 intervalMs 反复打行，返回停止函数。
+ *  调用方必须在 finally 里停掉——否则计时器会拖着事件循环不放。
+ *  @param intervalMs - 打点间隔（毫秒）
+ *  @param line - 取当前进度文案（每次打点现取，读到的就是那一刻的值）
+ *  @returns 停止函数（clearInterval，幂等） */
+function startHeartbeat(intervalMs: number, line: () => string): () => void {
+  const timer = setInterval(() => console.error(line()), intervalMs);
+  return () => clearInterval(timer);
+}
+
+/** 距起点的整秒数（进度行与耗时汇总共用）。
+ *  @param startedAt - 起点时间戳（Date.now()）
+ *  @returns 四舍五入到秒的已用时长 */
+function elapsedSeconds(startedAt: number): number {
+  return Math.round((Date.now() - startedAt) / 1000);
+}
+
 /**
  * 下载 + 解压内置表指定版本的 Node，返回「已去掉顶层版本目录」的内容目录（位于 workDir 内）。
  *
@@ -82,28 +104,52 @@ async function downloadExtract(
       // 流式下载（got@11 stream）：自动跟随重定向（≤10）、连接类错误自动重试；decompress 关闭保证
       // 字节原样落盘（.zip/.tar.gz 本体自含压缩，不能被 content-encoding 二次解压）；socket 60 秒
       // 静默即断，不限制总时长以兼容慢速大文件。
-      let nextMark = 20 * 1024 * 1024;
+      const downloadStartedAt = Date.now();
+      let transferred = 0;
       const source = got.stream(url, {
         decompress: false,
         timeout: { connect: 30000, response: 60000, socket: 60000 },
       });
       source.on("downloadProgress", (progress) => {
-        if (progress.transferred >= nextMark) {
-          console.error(`[ezn]   已下载 ${Math.round(progress.transferred / 1048576)} MB ...`);
-          nextMark += 20 * 1024 * 1024;
-        }
+        transferred = progress.transferred;
       });
-      await pipeline(source, createWriteStream(tmpArchive));
+      const stopDownloadTick = startHeartbeat(
+        DOWNLOAD_TICK_MS,
+        () =>
+          `[ezn]   已下载 ${Math.round(transferred / 1048576)} MB（已用 ${elapsedSeconds(downloadStartedAt)} 秒） ...`,
+      );
+      try {
+        await pipeline(source, createWriteStream(tmpArchive));
+      } finally {
+        stopDownloadTick();
+      }
+      console.error(
+        `[ezn] 下载完成（${Math.round(statSync(tmpArchive).size / 1048576)} MB，` +
+          `耗时 ${elapsedSeconds(downloadStartedAt)} 秒），正在解压 ...`,
+      );
 
-      console.error("[ezn] 下载完成，正在解压 ...");
       // 解压：zip → extract-zip（yauzl 内核，条目路径防穿越）；tar.gz → tar@6（纯 JS，从文件读取
       // 时按内容嗅探 gzip，unix 下软链接与执行位照常保留）。按 NODE_PLATFORMS 声明的格式分流而非
-      // 按扩展名——下载临时文件无扩展名。
-      if (opts.platform.ext === "zip") {
-        await extractZip(tmpArchive, { dir: extractDir });
-      } else {
-        await tar.x({ file: tmpArchive, cwd: extractDir });
+      // 按扩展名——下载临时文件无扩展名。onEntry / onentry 只用于进度计数（心跳行的「已解压 N 项」）。
+      const extractStartedAt = Date.now();
+      let extracted = 0;
+      const countEntry = (): void => {
+        extracted += 1;
+      };
+      const stopExtractTick = startHeartbeat(
+        EXTRACT_TICK_MS,
+        () => `[ezn]   已解压 ${extracted} 项（已用 ${elapsedSeconds(extractStartedAt)} 秒） ...`,
+      );
+      try {
+        if (opts.platform.ext === "zip") {
+          await extractZip(tmpArchive, { dir: extractDir, onEntry: countEntry });
+        } else {
+          await tar.x({ file: tmpArchive, cwd: extractDir, onentry: countEntry });
+        }
+      } finally {
+        stopExtractTick();
       }
+      console.error(`[ezn] 解压完成（${extracted} 项，耗时 ${elapsedSeconds(extractStartedAt)} 秒）`);
 
       // 上提一层去掉顶层版本目录（node-v24.9.0-win-x64/… → 内容直接落在 src 下）。
       const entries = readdirSync(extractDir);
@@ -232,6 +278,7 @@ export async function installNode(
     mirror: options.mirror ?? null,
   });
   try {
+    console.error("[ezn] 正在落位运行时文件 ...");
     materializeFlat(src, dir);
   } finally {
     // 失败时保留 dir 现场已落位的部分供排查（不回滚——回滚可能删掉已被覆盖的文件）
